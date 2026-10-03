@@ -15,8 +15,9 @@ function prompt(persons, pdfText) {
 Personen im Haushalt: ${names}.
 ${pdfText ? `Eingebetteter Text der Rechnung:\n"""\n${pdfText.slice(0, 12000)}\n"""\n` : ""}
 Antworte ausschließlich mit einem JSON-Objekt:
-{"datum":"YYYY-MM-DD","behandlung":"YYYY-MM-DD","behandlung_bis":"YYYY-MM-DD","arzt":"Praxis oder Name","betrag":123.45,"faellig":"YYYY-MM-DD","patient":"Vorname","kategorie":"ambulant","kurz":"kurze Beschreibung","positionen":[{"text":"Einzelbehandlung 45 Min.","anzahl":10,"einzelpreis":85.00,"bbhv":"51b"}]}
+{"datum":"YYYY-MM-DD","behandlung":"YYYY-MM-DD","behandlung_bis":"YYYY-MM-DD","arzt":"Praxis oder Name","betrag":123.45,"faellig":"YYYY-MM-DD","patient":"Vorname","kategorie":"ambulant","kurz":"kurze Beschreibung","vorsorge_anteil":0,"positionen":[{"text":"Einzelbehandlung 45 Min.","anzahl":10,"einzelpreis":85.00,"bbhv":"51b"}]}
 Regeln: datum = Rechnungsdatum. behandlung = Datum der ersten Behandlung/Leistung (aus den Leistungszeilen), behandlung_bis = Datum der letzten Behandlung; null, wenn nicht erkennbar. betrag = zu zahlender Gesamtbetrag in Euro als Zahl. faellig = Zahlungsziel; steht dort "innerhalb von N Tagen", rechne es aus; sonst null. patient = behandelte Person, möglichst einer der Haushaltsnamen, sonst null. kategorie = genau einer von: ${CAT_KEYS.join(", ")} (vorsorge = Vorsorgeuntersuchung, Schutzimpfung; zahnprophylaxe = professionelle Zahnreinigung, Zahnprophylaxe). kurz = höchstens 8 Wörter, z. B. "MRT Knie". Unlesbare Felder = null.
+vorsorge_anteil: NUR bei Zahnarztrechnungen = Summe der Beträge folgender Vorsorge-Positionen: GOZ 0010, 1000, 1010, 1020, 1030, 1040, 4005 und GOÄ 1; sonst 0. Besteht die ganze Zahnrechnung nur aus diesen Positionen, ist kategorie = zahnprophylaxe.
 positionen: NUR bei Logopädie oder Ergotherapie, sonst []. Fasse gleiche Leistungen mit gleichem Einzelpreis zu einer Position zusammen (anzahl = Anzahl der Termine). bbhv = passende Nummer aus Anlage 9 BBhV oder null: ${BBHV.items.map(x => `${x.code} ${x.l}`).join("; ")}.`;
 }
 
@@ -102,6 +103,8 @@ function normalize(r, persons) {
   if (b > 0) fields.betrag = Math.round(b * 100) / 100;
   if (CAT_KEYS.includes(r.kategorie)) fields.kategorie = r.kategorie;
   if (r.kurz) fields.notiz = String(r.kurz).slice(0, 200);
+  const va = Number(String(r.vorsorge_anteil ?? 0).replace(",", "."));
+  if (va > 0 && (fields.kategorie === "zahn" || fields.kategorie === "zahnersatz")) fields.vorsorgeAnteil = Math.round(va * 100) / 100;
   if (Array.isArray(r.positionen) && r.positionen.length) {
     const pos = r.positionen.map(x => ({ code: BBHV.items.some(b => b.code === String(x.bbhv)) ? String(x.bbhv) : "", text: String(x.text || "").slice(0, 80), qty: Number(x.anzahl) || 1, price: Number(String(x.einzelpreis).replace(",", ".")) || 0 })).filter(x => x.price > 0);
     if (pos.length) fields.positions = pos;

@@ -12,7 +12,7 @@ export const CATS = [
   { k: "hilfsmittel", l: "Hilfsmittel" },
   { k: "sehhilfe", l: "Brille / Kontaktlinsen" },
   { k: "stationaer", l: "Krankenhaus" },
-  { k: "zahnprophylaxe", l: "Zahnprophylaxe / PZR" },
+  { k: "zahnprophylaxe", l: "Zahn-Vorsorge (Kontrolle, PZR)" },
   { k: "vorsorge", l: "Vorsorge, Impfung" },
 ];
 // Höchstbeträge nach Anlage 9 BBhV (zu § 23 Abs. 1), gültig ab 01.02.2026.
@@ -117,7 +117,23 @@ const rateOf = (p, k) => num(p.rates?.[k] ?? (CAPPED_CATS.includes(k) ? p.rates?
 const baseOf = (p, i) => { const pc = positionCheck(p, i); return { pc, base: pc.rows.length ? Math.min(num(i.betrag), pc.recognized + pc.rest) : num(i.betrag) }; };
 const wasReimbursed = i => i.eingereicht || (i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "");
 
+// Zahnrechnungen mit Vorsorge-Anteil (Kontrolle, PZR …) in zwei Teile zerlegen:
+// der Vorsorge-Anteil ist BRE-neutral und ohne Selbstbehalt, der Rest ist eine normale Zahnrechnung.
+export function splitParts(invoices) {
+  const out = [];
+  for (const i of invoices) {
+    const v = Math.min(Number(i.vorsorgeAnteil) || 0, Number(i.betrag) || 0);
+    if (v > 0.004 && (i.kategorie === "zahn" || i.kategorie === "zahnersatz")) {
+      if (Number(i.betrag) - v <= 0.004) { out.push({ ...i, kategorie: "zahnprophylaxe", positions: undefined }); continue; }
+      out.push({ ...i, betrag: Math.round((Number(i.betrag) - v) * 100) / 100, _part: "main", _parent: i.id, positions: undefined });
+      out.push({ ...i, id: i.id + "#v", kategorie: "zahnprophylaxe", betrag: v, _part: "vorsorge", _parent: i.id, positions: undefined });
+    } else out.push(i);
+  }
+  return out;
+}
+
 export function dentalLedger(p, invoices, year) {
+  invoices = splitParts(invoices);
   const caps = dentalCapsOf(p), sy = startYearOf(p);
   const idx = sy ? year - sy + 1 : null;
   const limitFor = y => { if (!caps || !sy) return Infinity; const n = y - sy + 1; return n >= 1 && n <= caps.length ? caps[n - 1] : Infinity; };
@@ -156,13 +172,14 @@ function firstYearInfo(p, year) {
 }
 
 export function calc(p, invoices, year, taxRatePct) {
+  const dental = dentalLedger(p, invoices, year);
+  invoices = splitParts(invoices);
   const inv = invoices.filter(i => i.personId === p.id && yearOf(i) === year);
   const regular = inv.filter(i => !isNeutral(i.kategorie));
   const neutral = inv.filter(i => isNeutral(i.kategorie));
   const rate = i => rateOf(p, i.kategorie);
   const base = i => baseOf(p, i);
   const sbApplies = i => p.sbDental !== false || !isDental(i.kategorie);
-  const dental = dentalLedger(p, invoices, year);
   const dCut = i => dental.map[i.id]?.cut || 0;
   const total = inv.reduce((a, i) => a + num(i.betrag), 0);
   const fy = firstYearInfo(p, year);

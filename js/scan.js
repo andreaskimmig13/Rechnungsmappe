@@ -206,7 +206,21 @@ export function parseInvoice(text, persons = []) {
   const t = text.toLowerCase();
   let kat = "ambulant";
   if (/zahnersatz|krone|implantat|brücke|prothese|kieferorthop|heil- und kostenplan/.test(t)) kat = "zahnersatz";
-  else if (/\bgoz\b|zahnarzt|zahnärzt/.test(t)) kat = /prophylaxe|zahnreinigung|pzr|\b1040\b/.test(t) ? "zahnprophylaxe" : "zahn";
+  else if (/\bgoz\b|zahnarzt|zahnärzt|zahnmedizin/.test(t)) {
+    // Vorsorge-Ziffern laut Tarif (GOZ 0010, 1000–1040, 4005, GOÄ 1) aufsummieren
+    const VORS = /(?:^|\s|ziffer\s*|goz\s*)(0010|1000|1010|1020|1030|1040|4005)(?!\d|,)|(?:^|\s)(?:ä|goä\s*)1(?!\d|,)/i;
+    let vSum = 0, anyPos = 0;
+    for (const l of lines) {
+      const amts = [...l.matchAll(AMT)].map(m => parseAmt(m[1]));
+      if (!amts.length || /summe|gesamt|rechnungsbetrag|zu zahlen|mwst/i.test(l)) continue;
+      if (/\b\d{4}\b|ä\s?\d|goz|goä/i.test(l)) anyPos++;
+      if (VORS.test(l)) vSum += amts.at(-1);
+    }
+    vSum = Math.round(vSum * 100) / 100;
+    const tot = out.fields.betrag || 0;
+    if ((vSum > 0 && tot && vSum >= tot - 0.5) || (!anyPos && /prophylaxe|zahnreinigung|pzr|kontrolluntersuchung|vorsorgeuntersuchung/.test(t))) kat = "zahnprophylaxe";
+    else { kat = "zahn"; if (vSum > 0) { out.fields.vorsorgeAnteil = vSum; out.sure.vorsorgeAnteil = false; } }
+  }
   else if (/logopäd|sprachtherap|sprechtherap|stimmtherap|schlucktherap/.test(t)) kat = "logopaedie";
   else if (/ergotherap|hirnleistungstraining/.test(t)) kat = "ergotherapie";
   else if (/physiotherap|krankengymnastik|manuelle therapie|massage|lymphdrainage|osteopath/.test(t)) kat = "heilmittel";

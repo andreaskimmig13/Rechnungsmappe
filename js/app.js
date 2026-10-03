@@ -4,7 +4,7 @@ import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.2.0";
+const APP_VERSION = "2.3.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -366,8 +366,8 @@ function invRow(l) {
   if (l.dentalCut > 0.004) notes.push(`Zahn-Budget −${fmtEur(l.dentalCut)}`);
   if (l.sbPart > 0.004) notes.push(`trägt ${fmtEur(l.sbPart)} Selbstbehalt`);
   if (l.inv.unfall) notes.push("Unfall");
-  return `<a class="row" href="#/rechnung/${i.id}">
-    <span class="row-t"><b>${esc(i.arzt || "Ohne Praxisangabe")}</b><span class="xs muted">${i.behandlung ? "Behandlung " : ""}${dShort(effDate(i))}${notes.length ? " · " + notes.join(" · ") : ""}</span><span class="st ${st.cls}">${esc(st.label)}</span></span>
+  return `<a class="row" href="#/rechnung/${i._parent || i.id}">
+    <span class="row-t"><b>${esc(i.arzt || "Ohne Praxisangabe")}${i._part === "vorsorge" ? " · Vorsorge-Anteil" : i._part === "main" ? " · Behandlung" : ""}</b><span class="xs muted">${i.behandlung ? "Behandlung " : ""}${dShort(effDate(i))}${notes.length ? " · " + notes.join(" · ") : ""}</span><span class="st ${st.cls}">${esc(st.label)}</span></span>
     <span class="row-v"><b>${fmtEur(l.amount)}</b><span class="xs ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)} zurück</span></span></a>`;
 }
 
@@ -528,7 +528,8 @@ function viewList() {
   for (const i of list) { const k = effDate(i).slice(0, 7); let g = byMonth.find(x => x.k === k); if (!g) byMonth.push(g = { k, items: [] }); g.items.push(i); }
   const seg = (val, label, n) => `<button type="button" data-fs="${val}" aria-pressed="${ui.fStatus === val}">${label}${n ? `<span class="cnt">${n}</span>` : ""}</button>`;
   const chip = (val, label) => `<button type="button" class="chip" data-fp="${val}" aria-pressed="${ui.fPerson === val}">${label}</button>`;
-  const row = i => { const st = statusOf(i), e = exp[i.id], pn = person(i.personId)?.name || "?";
+  const row = i => { const st = statusOf(i), pn = person(i.personId)?.name || "?";
+    const e0 = exp[i.id], ev = exp[i.id + "#v"], e = e0 || ev ? { refund: (e0?.refund || 0) + (ev?.refund || 0) } : null;
     return `<a href="#/rechnung/${i.id}" class="row">
       <span class="cat">${ic(CAT_IC[i.kategorie] || "doc", 20)}</span>
       <span class="row-t"><b>${esc(i.arzt || "Ohne Praxisangabe")}</b><span class="xs muted">${i.behandlung ? `Behandlung ${dShort(i.behandlung)}${i.behandlung.slice(0, 4) !== (i.datum || "").slice(0, 4) ? " " + i.behandlung.slice(0, 4) : ""}` : dShort(i.datum)} · ${esc(pn)}${i.notiz ? " · " + esc(i.notiz) : ""}</span>${e ? `<span class="xs good-t">${fmtEur(e.refund)} zurück</span>` : ""}</span>
@@ -631,6 +632,7 @@ function viewEdit() {
           ${fr("f-beh", `Behandlung <span class="xs muted">${i.behandlung && i.datum && i.behandlung.slice(0, 4) !== i.datum.slice(0, 4) ? `zählt zu ${i.behandlung.slice(0, 4)}` : "falls anders als Rechnung"}</span>`, "behandlung", `<input id="f-beh" type="date" class="${flagCls("behandlung")}" value="${esc(i.behandlung || "")}">`)}
           ${fr("f-faellig", "Zahlbar bis", "faellig", `<input id="f-faellig" type="date" class="${flagCls("faellig")}" value="${esc(i.faellig || "")}">`)}
           ${fr("f-kat", "Kategorie", "kategorie", `<select id="f-kat" class="${flagCls("kategorie")}">${CATS.map(c => `<option value="${c.k}" ${c.k === i.kategorie ? "selected" : ""}>${esc(c.l)}</option>`).join("")}</select>`)}
+          ${i.kategorie === "zahn" || i.kategorie === "zahnersatz" ? fr("f-vors", `davon Vorsorge (€) <span class="xs muted">Kontrolle, PZR – BRE-neutral</span>`, "vorsorgeAnteil", `<input id="f-vors" type="number" inputmode="decimal" step="0.01" min="0" class="${flagCls("vorsorgeAnteil")}" value="${i.vorsorgeAnteil ? Number(i.vorsorgeAnteil).toFixed(2) : ""}" placeholder="0,00">`) : ""}
           ${fr("f-notiz", "Notiz", "notiz", `<input id="f-notiz" class="${flagCls("notiz")}" value="${esc(i.notiz || "")}" placeholder="z. B. MRT Knie">`)}
         </div>
         ${positionsEditor()}
@@ -668,7 +670,7 @@ function viewEdit() {
   $("#f-del")?.addEventListener("click", deleteInvoice);
   $("#f-share")?.addEventListener("click", shareBeleg);
   // Eingaben sofort in den Entwurf übernehmen, damit ein Neuzeichnen nichts verliert
-  const FIELD = { "f-beh": "behandlung", "f-person": "personId", "f-arzt": "arzt", "f-datum": "datum", "f-betrag": "betrag", "f-faellig": "faellig", "f-kat": "kategorie", "f-notiz": "notiz" };
+  const FIELD = { "f-vors": "vorsorgeAnteil", "f-beh": "behandlung", "f-person": "personId", "f-arzt": "arzt", "f-datum": "datum", "f-betrag": "betrag", "f-faellig": "faellig", "f-kat": "kategorie", "f-notiz": "notiz" };
   $("#inv-form").addEventListener("input", e => { const k = FIELD[e.target.id]; if (k) { draft.src[k] = "user"; e.target.classList.remove("f-ki", "f-chk"); e.target.closest(".fr, .field")?.querySelector(".fs")?.remove(); } collectForm(); const box = $("#refund-box"); const html = refundBox(); if (box) { if (html) box.outerHTML = html; else box.remove(); } else if (html) $(".toggles").insertAdjacentHTML("beforebegin", html); });
   $("#inv-form").addEventListener("change", collectForm);
 }
@@ -707,7 +709,8 @@ function refundBox() {
   const i = draft.inv;
   if (!(Number(i.betrag) > 0) || !i.personId || !i.datum) return "";
   const others = S.invoices.filter(x => x.id !== i.id);
-  const l = expectedFor([...others, i])[i.id];
+  const map = expectedFor([...others, i]);
+  const l = map[i.id], lv = map[i.id + "#v"];
   if (!l) return "";
   const p = person(i.personId);
   const real = i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "";
@@ -715,16 +718,18 @@ function refundBox() {
   return `<section class="card stack-s" id="refund-box">
     <div class="split"><h2 class="h3">Erstattung bei Einreichung</h2><a class="xs" href="#/jahr/${i.personId}/${yearOf(i)}">${esc(p?.name || "")} ${yearOf(i)}</a></div>
     <div class="wf">
-      ${row("Rechnungsbetrag", fmtEur(l.amount))}
+      ${row(lv ? "Rechnungsbetrag ohne Vorsorge-Anteil" : "Rechnungsbetrag", fmtEur(l.amount))}
       ${l.capCut > 0.004 ? row("− über Beihilfe-Höchstbetrag", fmtEur(l.capCut), "minus") : ""}
       ${row(`− nicht erstattet (Satz ${Math.round(l.rate * 100)} %)`, fmtEur(l.rateCut), "minus")}
       ${l.dentalCut > 0.004 ? row("− über Zahn-Höchstbetrag", fmtEur(l.dentalCut), "minus") : ""}
       ${row(l.neutral ? "− Selbstbehalt (entfällt bei Vorsorge)" : l.sbFree ? "− Selbstbehalt (gilt nicht für Zahn)" : "− Anteil am Selbstbehalt", fmtEur(l.sbPart), "minus")}
-      ${row("= voraussichtlich erstattet", fmtEur(l.refund), "sum")}
+      ${lv ? row("+ Vorsorge-Anteil (BRE-neutral, ohne Selbstbehalt)", fmtEur(lv.refund), "extra") : ""}
+      ${row("= voraussichtlich erstattet", fmtEur(l.refund + (lv?.refund || 0)), "sum")}
       ${real ? row("tatsächlich erstattet", fmtEur(i.erstattet), Math.abs(Number(i.erstattet) - l.refund) < 0.01 ? "extra" : "diff") : ""}
     </div>
     ${real && Math.abs(Number(i.erstattet) - l.refund) >= 0.01 ? `<p class="xs muted">Abweichung ${fmtEur(Number(i.erstattet) - l.refund)} – prüfe den Leistungsbescheid oder die Erstattungssätze im Tarif.</p>` : ""}
     ${(() => { if (!isDental(i.kategorie) || !p) return ""; const d = dentalLedger(p, [...others, i], yearOf(i)); return d.active ? `<p class="xs ${l.dentalCut > 0.004 ? "bad-t" : "muted"}">${i.unfall ? "Unfallfolge: zählt nicht zum Zahn-Budget." : `Zahn-Budget ${p.name}: noch ${fmtEur(d.remaining)} von ${fmtEur(d.limit)} frei (inkl. dieser Rechnung).`}</p>` : ""; })()}
+    ${lv || i.kategorie === "zahnprophylaxe" ? `<p class="xs muted">Zahn-Vorsorge (GOZ 0010, 1000–1040${p?.presetId === "signal-exklusiv1" ? ", 4005" : ""}, GOÄ 1) kostet keine Rückerstattung.${p?.presetId === "signal-exklusiv1" ? " Signal Iduna: mit dem „Vorblatt für Vorsorgeuntersuchungen“ einreichen, persönliche Leistungen höchstens zum 2,3-fachen Satz." : ""}${lv ? " Willst du die Rückerstattung behalten, bitte die Praxis, Vorsorge und Behandlung getrennt abzurechnen – dann kannst du die Vorsorge einreichen, ohne die Rückerstattung zu verlieren." : ""}</p>` : ""}
     ${!l.neutral && !l.sbFree ? `<p class="xs muted">Der Selbstbehalt wird auf die Rechnungen des Jahres in Datumsreihenfolge verrechnet.</p>` : ""}
   </section>`;
 }
@@ -745,6 +750,7 @@ function collectForm() {
   if (!$("#inv-form")) return;
   const i = draft.inv;
   i.personId = $("#f-person").value; i.arzt = $("#f-arzt").value.trim(); i.datum = $("#f-datum").value;
+  const vf = $("#f-vors"); if (vf) { const v = Number(vf.value) || 0; if (v > 0) i.vorsorgeAnteil = Math.round(v * 100) / 100; else delete i.vorsorgeAnteil; } else delete i.vorsorgeAnteil;
   const bh = $("#f-beh")?.value || ""; if (bh && bh !== i.datum) i.behandlung = bh; else delete i.behandlung;
   const b = $("#f-betrag").value; i.betrag = b === "" ? "" : Math.round(Number(b) * 100) / 100;
   i.faellig = $("#f-faellig").value || ""; i.kategorie = $("#f-kat").value; i.notiz = $("#f-notiz").value.trim();
