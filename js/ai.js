@@ -4,8 +4,8 @@ import { CAT_KEYS } from "./scan.js";
 import { b64 } from "./store.js";
 
 export const PROVIDERS = {
-  gemini: { label: "Google Gemini", note: "kostenlos · EU-Datenschutzregeln", keyHint: "Schlüssel aus aistudio.google.com", models: ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-flash-latest"] },
-  claude: { label: "Claude (Anthropic)", note: "ca. 0,3 Cent pro Rechnung", keyHint: "Schlüssel aus platform.claude.com", models: ["claude-haiku-4-5-20251001"] },
+  claude: { label: "Claude (Anthropic)", note: "ca. 0,3 Cent pro Rechnung · auch privat erlaubt", keyHint: "Schlüssel aus platform.claude.com", models: ["claude-haiku-4-5-20251001"] },
+  gemini: { label: "Google Gemini", note: "laut Google nur für berufliche Nutzung", keyHint: "Schlüssel aus aistudio.google.com", models: ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-flash-latest"] },
 };
 
 function prompt(persons, pdfText) {
@@ -70,7 +70,7 @@ async function callClaude(key, model, images, text) {
 export async function aiRead({ provider, apiKey, model }, images, persons, pdfText = "") {
   if (!apiKey) throw new AIError("nokey", "Trag zuerst in den Einstellungen einen API-Schlüssel ein.");
   if (!navigator.onLine) throw new AIError("offline", "Du bist offline. Das KI-Auslesen braucht eine Internetverbindung.");
-  const P = PROVIDERS[provider] || PROVIDERS.gemini;
+  const P = PROVIDERS[provider] || PROVIDERS.claude;
   const text = prompt(persons, pdfText);
   const imgs = images.slice(0, 3);
   const models = [model, ...P.models].filter((m, i, a) => m && a.indexOf(m) === i);

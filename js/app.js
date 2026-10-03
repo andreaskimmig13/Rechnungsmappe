@@ -4,7 +4,7 @@ import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.1";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -45,7 +45,7 @@ let picking = 0;       // Zeitpunkt, an dem Kamera/Dateiauswahl geöffnet wurde
 
 const defaultState = () => ({
   version: 1,
-  settings: { taxRate: 42, lockMinutes: 1, ai: { provider: "gemini", apiKey: "", model: "", askBefore: true } },
+  settings: { taxRate: 42, lockMinutes: 1, ai: { provider: "claude", apiKey: "", model: "", askBefore: true } },
   persons: [], invoices: [],
 });
 
@@ -396,7 +396,7 @@ function viewEdit() {
   const i = draft.inv;
   const hasPages = draft.pages.length > 0;
   const st = draft.status;
-  const prov = PROVIDERS[S.settings.ai.provider] || PROVIDERS.gemini;
+  const prov = PROVIDERS[S.settings.ai.provider] || PROVIDERS.claude;
   page(`${header(draft.isNew ? "Rechnung erfassen" : "Rechnung", { back: draft.isNew ? "#/" : "#/rechnungen" })}
     <main class="main">
       <section class="stack">
@@ -557,7 +557,7 @@ async function runOcr() {
 async function runAi() {
   collectForm();
   const ai = S.settings.ai;
-  const prov = PROVIDERS[ai.provider] || PROVIDERS.gemini;
+  const prov = PROVIDERS[ai.provider] || PROVIDERS.claude;
   if (!ai.apiKey) {
     const go = await modal({ title: "API-Schlüssel fehlt", body: `<p>Für das Auslesen mit ${esc(prov.label)} brauchst du einen eigenen Schlüssel. Trag ihn in den Einstellungen ein.</p>`, actions: [{ label: "Abbrechen", value: false }, { label: "Zu den Einstellungen", value: true, primary: true }] });
     if (go) { sessionStorage.setItem("returnTo", location.hash); location.hash = "#/einstellungen"; }
@@ -724,9 +724,9 @@ async function viewSettings() {
       <section class="stack-s"><h3 class="sec">KI-Auslesen</h3>
         <form class="card list-form" id="ai-form">
           ${Object.entries(PROVIDERS).map(([k, p]) => `<label class="tg"><span class="tg-t"><span>${esc(p.label)}</span><span class="xs muted">${esc(p.note)}</span></span><input type="radio" name="prov" value="${k}" ${s.ai.provider === k ? "checked" : ""}></label>`).join("")}
-          <label class="field pad-f"><span>API-Schlüssel <span class="xs muted">(${esc((PROVIDERS[s.ai.provider] || PROVIDERS.gemini).keyHint)})</span></span><input id="ai-key" type="password" autocomplete="off" placeholder="Schlüssel einfügen" value="${esc(s.ai.apiKey)}"></label>
+          <label class="field pad-f"><span>API-Schlüssel <span class="xs muted">(${esc((PROVIDERS[s.ai.provider] || PROVIDERS.claude).keyHint)})</span></span><input id="ai-key" type="password" autocomplete="off" placeholder="Schlüssel einfügen" value="${esc(s.ai.apiKey)}"></label>
           <label class="tg"><span class="tg-t"><span>Vor jedem KI-Aufruf fragen</span><span class="xs muted">Nur die Seitenbilder werden gesendet</span></span><input type="checkbox" class="sw" id="ai-ask" ${s.ai.askBefore ? "checked" : ""}></label>
-          <details class="pad-f"><summary class="small">Erweitert</summary><label class="field"><span>Modell (leer = Standard)</span><input id="ai-model" value="${esc(s.ai.model || "")}" placeholder="${esc((PROVIDERS[s.ai.provider] || PROVIDERS.gemini).models[0])}"></label></details>
+          <details class="pad-f"><summary class="small">Erweitert</summary><label class="field"><span>Modell (leer = Standard)</span><input id="ai-model" value="${esc(s.ai.model || "")}" placeholder="${esc((PROVIDERS[s.ai.provider] || PROVIDERS.claude).models[0])}"></label></details>
           <div class="pad-f"><button type="submit" class="btn primary">KI-Einstellungen speichern</button></div>
         </form>
       </section>
