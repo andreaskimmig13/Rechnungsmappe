@@ -1,6 +1,6 @@
 // Service Worker: macht die App offline nutzbar. Er speichert nur Programmdateien,
 // niemals Rechnungen (die liegen verschlüsselt in IndexedDB).
-const VERSION = "rm-2.0.0";
+const VERSION = "rm-2.1.0";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/app.css",
   "js/app.js", "js/store.js", "js/calc.js", "js/scan.js", "js/ai.js", "js/exporter.js",

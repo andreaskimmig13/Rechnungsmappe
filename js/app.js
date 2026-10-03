@@ -4,13 +4,26 @@ import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.1.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const today = () => new Date().toISOString().slice(0, 10);
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const root = $("#app");
+
+// ---------- Darstellung: automatisch / hell / dunkel ----------
+function getTheme() { try { return localStorage.getItem("rm-theme") || "auto"; } catch { return "auto"; } }
+function applyTheme(t = getTheme()) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const dark = t === "dark" || (t === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.remove());
+  const m = document.createElement("meta"); m.name = "theme-color"; m.content = dark ? "#0C111D" : "#F5F6F8"; document.head.append(m);
+}
+function setTheme(t) { try { localStorage.setItem("rm-theme", t); } catch {} applyTheme(t); }
+applyTheme();
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme());
 
 // ---------- Icons ----------
 const I = {
@@ -992,6 +1005,12 @@ async function viewSettings() {
         </div>
       </section>
 
+      <section class="stack-s"><h3 class="sec">Darstellung</h3>
+        <div class="card list-form"><div class="tg"><span>Farbschema</span>
+          <div class="seg" role="group" aria-label="Farbschema">${[["auto", "Automatisch"], ["light", "Hell"], ["dark", "Dunkel"]].map(([v, l]) => `<button type="button" data-theme-set="${v}" aria-pressed="${getTheme() === v}">${l}</button>`).join("")}</div>
+        </div></div>
+      </section>
+
       <section class="stack-s"><h3 class="sec">App-Sperre</h3>
         <div class="card list-form">
           <label class="tg"><span>Sperren nach</span><select id="lockmin">${[[0, "Sofort"], [1, "1 Minute"], [5, "5 Minuten"], [15, "15 Minuten"]].map(([v, l]) => `<option value="${v}" ${s.lockMinutes === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
@@ -1016,6 +1035,7 @@ async function viewSettings() {
   $("#tax-form").onsubmit = async e => { e.preventDefault(); s.taxRate = Math.min(55, Math.max(0, Number($("#tax").value) || 0)); await save(); toast("Steuersatz gespeichert"); };
   $("#lockmin").onchange = async e => { s.lockMinutes = Number(e.target.value); await save(); toast("Gespeichert"); };
   $("#lock-now").onclick = () => doLock();
+  $$("[data-theme-set]").forEach(b => b.onclick = () => { setTheme(b.dataset.themeSet); $$("[data-theme-set]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); });
   $("#add-p").onclick = async () => { const p = personFromPreset("custom", "child", { name: "Neue Person" }); S.persons.push(p); await save(); location.hash = `#/person/${p.id}`; };
   $("#bk-make").onclick = makeBackupFlow;
   $("#bk-load").onchange = e => importFile(e.target.files[0], { replace: false });
