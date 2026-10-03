@@ -1,10 +1,10 @@
 import * as store from "./store.js";
-import { CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, fmtEur, fmtDate, fmtShort } from "./calc.js";
+import { CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck } from "./calc.js";
 import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -240,7 +240,8 @@ function waterfall(r, { compact = false } = {}) {
   const n = r.lines.length;
   return `<div class="wf">
     ${row(`Rechnungen ${ui.year} (${n} Stück)`, fmtEur(r.regularTotal))}
-    ${r.notCovered > 0.004 || !compact ? row("− nicht erstattet (Tarif unter 100 %)", fmtEur(r.notCovered), "minus") : ""}
+    ${r.capCut > 0.004 ? row("− über Höchstbetrag (Beihilfe-Liste)", fmtEur(r.capCut), "minus") : ""}
+    ${r.notCovered - r.capCut > 0.004 || !compact ? row("− nicht erstattet (Tarif unter 100 %)", fmtEur(r.notCovered - r.capCut), "minus") : ""}
     ${row(`− Selbstbehalt${r.sb > r.sbUsed + 0.004 ? ` (${fmtEur(r.sb - r.sbUsed)} noch offen)` : ""}`, fmtEur(r.sbUsed), "minus")}
     ${row("= Erstattung bei Einreichung", fmtEur(r.payout), "sum")}
     ${r.neutralLines.length ? row(`+ Vorsorge/Impfung (${r.neutralLines.length}), BRE-neutral`, fmtEur(r.neutralRefund), "extra") : ""}
@@ -290,7 +291,7 @@ function viewPersonYear(pid, year) {
   const line = l => `<li><a class="bk" href="#/rechnung/${l.inv.id}">
     <span class="split top-a"><strong>${esc(l.inv.arzt || "Ohne Praxisangabe")}</strong><span class="num strong nowrap">${fmtEur(l.amount)}</span></span>
     <span class="xs muted">${fmtDate(l.inv.datum)} · ${esc(l.inv.notiz || catLabel(l.inv.kategorie))}</span>
-    <span class="bk-calc xs"><span>Satz ${Math.round(l.rate * 100)} %${l.notCovered > 0.004 ? ` · −${fmtEur(l.notCovered)}` : ""}</span><span>${l.neutral ? "ohne Selbstbehalt" : l.sbFree ? "ohne SB (Zahn)" : l.sbPart > 0.004 ? `SB −${fmtEur(l.sbPart)}` : "SB schon erreicht"}</span><span class="num strong ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)}</span></span>
+    <span class="bk-calc xs"><span>${l.capCut > 0.004 ? `Höchstbetrag −${fmtEur(l.capCut)} · ` : ""}Satz ${Math.round(l.rate * 100)} %${l.rateCut > 0.004 ? ` · −${fmtEur(l.rateCut)}` : ""}</span><span>${l.neutral ? "ohne Selbstbehalt" : l.sbFree ? "ohne SB (Zahn)" : l.sbPart > 0.004 ? `SB −${fmtEur(l.sbPart)}` : "SB schon erreicht"}</span><span class="num strong ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)}</span></span>
     <span class="tags">${stamps(l.inv)}</span>
   </a></li>`;
   page(`${header(`${p.name} · ${year}`, { back: "#/", sub: `${p.insurer} · ${p.tariff}` })}
@@ -500,6 +501,7 @@ function viewEdit() {
           <label class="field"><span>Kategorie ${fieldState("kategorie")}</span><select id="f-kat" class="${flagCls("kategorie")}">${CATS.map(c => `<option value="${c.k}" ${c.k === i.kategorie ? "selected" : ""}>${esc(c.l)}</option>`).join("")}</select></label>
         </div>
         <label class="field"><span>Notiz ${fieldState("notiz")}</span><input id="f-notiz" class="${flagCls("notiz")}" value="${esc(i.notiz || "")}" placeholder="z. B. MRT Knie"></label>
+        ${positionsEditor()}
         <div class="card toggles">
           <label class="tg"><span>Bezahlt</span><input type="checkbox" class="sw" id="f-bezahlt" ${i.bezahlt ? "checked" : ""}></label>
           <label class="tg"><span>Bei der Versicherung eingereicht</span><input type="checkbox" class="sw" id="f-eing" ${i.eingereicht ? "checked" : ""}></label>
@@ -518,12 +520,51 @@ function viewEdit() {
   $$("[data-rot]").forEach(b => b.onclick = () => rotatePage(Number(b.dataset.rot)));
   $$("[data-delpg]").forEach(b => b.onclick = () => removePage(Number(b.dataset.delpg)));
   $("#inv-form").onsubmit = saveDraft;
+  $("#f-kat").addEventListener("change", () => { collectForm(); viewEdit(); });
+  $("#f-person").addEventListener("change", () => { collectForm(); viewEdit(); });
+  $("#pos-add")?.addEventListener("click", () => { collectForm(); const k = draft.inv.kategorie; (draft.inv.positions ||= []).push({ code: k === "logopaedie" ? "51b" : "54a", text: "", qty: 1, price: 0 }); viewEdit(); });
+  $$("[data-delpos]").forEach(b => b.onclick = () => { collectForm(); draft.inv.positions.splice(Number(b.dataset.delpos), 1); viewEdit(); });
+  $$("[data-pos]").forEach(el => el.addEventListener("change", () => {
+    const pos = draft.inv.positions[Number(el.dataset.pos)]; const f = el.dataset.f;
+    pos[f] = f === "code" ? el.value : Number(el.value) || 0;
+    draft.src.positions = "user"; collectForm(); viewEdit();
+  }));
   $("#f-del")?.addEventListener("click", deleteInvoice);
   $("#f-share")?.addEventListener("click", shareBeleg);
   // Eingaben sofort in den Entwurf übernehmen, damit ein Neuzeichnen nichts verliert
   const FIELD = { "f-person": "personId", "f-arzt": "arzt", "f-datum": "datum", "f-betrag": "betrag", "f-faellig": "faellig", "f-kat": "kategorie", "f-notiz": "notiz" };
   $("#inv-form").addEventListener("input", e => { const k = FIELD[e.target.id]; if (k) { draft.src[k] = "user"; e.target.classList.remove("f-ki", "f-chk"); e.target.closest(".field")?.querySelector(".fs")?.remove(); } collectForm(); const box = $("#refund-box"); const html = refundBox(); if (box) { if (html) box.outerHTML = html; else box.remove(); } else if (html) $("#inv-form").insertAdjacentHTML("beforebegin", html); });
   $("#inv-form").addEventListener("change", collectForm);
+}
+
+function positionsEditor() {
+  const i = draft.inv;
+  if (!CAPPED_CATS.includes(i.kategorie)) return "";
+  const p = person(i.personId);
+  const capped = p && capsOf(p) === "bbhv";
+  const pos = i.positions || [];
+  const items = BBHV.items.filter(x => x.cat === i.kategorie || x.cat === "both");
+  const pc = p ? positionCheck(p, i) : { rows: [] };
+  const diff = pos.length ? Math.round(((Number(i.betrag) || 0) - pc.billed) * 100) / 100 : 0;
+  return `<section class="card stack" id="pos-ed">
+    <div class="split"><h2 class="h3">Leistungspositionen ${fieldState("positions")}</h2><span class="xs muted">${capped ? `Höchstbeträge BBhV ab ${fmtDate(BBHV.valid)}` : "ohne Höchstbeträge im Tarif"}</span></div>
+    ${capped ? `<p class="xs muted">Dein Tarif erstattet ${i.kategorie === "logopaedie" ? "Logopädie" : "Ergotherapie"} nur bis zum Beihilfe-Höchstbetrag je Leistung. Trag die Positionen der Rechnung ein, dann rechnet die App den Teil heraus, der nicht erstattet wird.</p>` : ""}
+    ${pc.rows.map((r, n) => `<div class="pos ${r.cut > 0.004 ? "pos-cut" : ""}">
+      <select data-pos="${n}" data-f="code" aria-label="Leistung"><option value="">Andere Leistung</option>${items.map(x => `<option value="${x.code}" ${x.code === r.code ? "selected" : ""}>${x.code} · ${esc(x.l)}</option>`).join("")}</select>
+      <div class="pos-row">
+        <label class="pf"><span>Anzahl</span><input data-pos="${n}" data-f="qty" type="number" inputmode="numeric" min="1" step="1" value="${r.qty}"></label>
+        <label class="pf"><span>Preis je (€)</span><input data-pos="${n}" data-f="price" type="number" inputmode="decimal" min="0" step="0.01" value="${r.price.toFixed(2)}"></label>
+        <button type="button" class="icon-btn sm" data-delpos="${n}" aria-label="Position entfernen">${ic("trash", 18)}</button>
+      </div>
+      <div class="xs ${r.cut > 0.004 ? "warn-t" : "muted"}">${r.max != null ? (r.cut > 0.004 ? `Anerkannt ${fmtEur(r.max)} statt ${fmtEur(r.price)} je Leistung → ${fmtEur(r.cut)} nicht erstattungsfähig` : `Im Rahmen des Höchstbetrags (${fmtEur(r.max)})`) : capped ? "Ohne Höchstbetrag gerechnet – passende Leistung wählen" : ""}</div>
+    </div>`).join("")}
+    <button type="button" class="btn sm" id="pos-add">${ic("plus", 18)} Position hinzufügen</button>
+    ${pos.length ? `<div class="wf">
+      <div class="wf-r"><span>Abgerechnet laut Positionen</span><span class="num">${fmtEur(pc.billed)}</span></div>
+      ${capped ? `<div class="wf-r minus"><span>− über Höchstbetrag</span><span class="num">${fmtEur(pc.capCut)}</span></div><div class="wf-r sum"><span>= erstattungsfähig vor Satz</span><span class="num">${fmtEur(pc.recognized + pc.rest)}</span></div>` : ""}
+    </div>
+    ${Math.abs(diff) >= 0.01 ? `<p class="xs warn-t">Die Positionen ergeben ${fmtEur(pc.billed)}, der Rechnungsbetrag ist ${fmtEur(i.betrag)}. ${diff > 0 ? "Der Rest wird ohne Höchstbetrag gerechnet." : "Bitte Positionen prüfen."}</p>` : ""}` : ""}
+  </section>`;
 }
 
 function refundBox() {
@@ -539,7 +580,8 @@ function refundBox() {
     <div class="split"><h2 class="h3">Erstattung</h2><a class="xs" href="#/jahr/${i.personId}/${yearOf(i)}">Alle Rechnungen ${esc(p?.name || "")} ${yearOf(i)}</a></div>
     <div class="wf">
       ${row("Rechnungsbetrag", fmtEur(l.amount))}
-      ${row(`− nicht erstattet (Satz ${Math.round(l.rate * 100)} %)`, fmtEur(l.notCovered), "minus")}
+      ${l.capCut > 0.004 ? row("− über Beihilfe-Höchstbetrag", fmtEur(l.capCut), "minus") : ""}
+      ${row(`− nicht erstattet (Satz ${Math.round(l.rate * 100)} %)`, fmtEur(l.rateCut), "minus")}
       ${row(l.neutral ? "− Selbstbehalt (entfällt bei Vorsorge)" : l.sbFree ? "− Selbstbehalt (gilt nicht für Zahn)" : "− Anteil am Selbstbehalt", fmtEur(l.sbPart), "minus")}
       ${row("= voraussichtlich erstattet", fmtEur(l.refund), "sum")}
       ${real ? row("tatsächlich erstattet", fmtEur(i.erstattet), Math.abs(Number(i.erstattet) - l.refund) < 0.01 ? "extra" : "diff") : ""}

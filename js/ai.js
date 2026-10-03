@@ -2,6 +2,7 @@
 // ausschließlich die Seitenbilder (und ggf. der PDF-Text) dieser einen Rechnung.
 import { CAT_KEYS } from "./scan.js";
 import { b64 } from "./store.js";
+import { BBHV } from "./calc.js";
 
 export const PROVIDERS = {
   claude: { label: "Claude (Anthropic)", note: "ca. 0,3 Cent pro Rechnung · auch privat erlaubt", keyHint: "Schlüssel aus platform.claude.com", models: ["claude-haiku-4-5-20251001"] },
@@ -14,8 +15,9 @@ function prompt(persons, pdfText) {
 Personen im Haushalt: ${names}.
 ${pdfText ? `Eingebetteter Text der Rechnung:\n"""\n${pdfText.slice(0, 12000)}\n"""\n` : ""}
 Antworte ausschließlich mit einem JSON-Objekt:
-{"datum":"YYYY-MM-DD","arzt":"Praxis oder Name","betrag":123.45,"faellig":"YYYY-MM-DD","patient":"Vorname","kategorie":"ambulant","kurz":"kurze Beschreibung"}
-Regeln: datum = Rechnungsdatum. betrag = zu zahlender Gesamtbetrag in Euro als Zahl. faellig = Zahlungsziel; steht dort "innerhalb von N Tagen", rechne es aus; sonst null. patient = behandelte Person, möglichst einer der Haushaltsnamen, sonst null. kategorie = genau einer von: ${CAT_KEYS.join(", ")} (vorsorge = Vorsorgeuntersuchung, Schutzimpfung, professionelle Zahnreinigung). kurz = höchstens 8 Wörter, z. B. "MRT Knie". Unlesbare Felder = null.`;
+{"datum":"YYYY-MM-DD","arzt":"Praxis oder Name","betrag":123.45,"faellig":"YYYY-MM-DD","patient":"Vorname","kategorie":"ambulant","kurz":"kurze Beschreibung","positionen":[{"text":"Einzelbehandlung 45 Min.","anzahl":10,"einzelpreis":85.00,"bbhv":"51b"}]}
+Regeln: datum = Rechnungsdatum. betrag = zu zahlender Gesamtbetrag in Euro als Zahl. faellig = Zahlungsziel; steht dort "innerhalb von N Tagen", rechne es aus; sonst null. patient = behandelte Person, möglichst einer der Haushaltsnamen, sonst null. kategorie = genau einer von: ${CAT_KEYS.join(", ")} (vorsorge = Vorsorgeuntersuchung, Schutzimpfung, professionelle Zahnreinigung). kurz = höchstens 8 Wörter, z. B. "MRT Knie". Unlesbare Felder = null.
+positionen: NUR bei Logopädie oder Ergotherapie, sonst []. Fasse gleiche Leistungen mit gleichem Einzelpreis zu einer Position zusammen (anzahl = Anzahl der Termine). bbhv = passende Nummer aus Anlage 9 BBhV oder null: ${BBHV.items.map(x => `${x.code} ${x.l}`).join("; ")}.`;
 }
 
 const blobToB64 = async b => b64(new Uint8Array(await b.arrayBuffer()));
@@ -98,6 +100,10 @@ function normalize(r, persons) {
   if (b > 0) fields.betrag = Math.round(b * 100) / 100;
   if (CAT_KEYS.includes(r.kategorie)) fields.kategorie = r.kategorie;
   if (r.kurz) fields.notiz = String(r.kurz).slice(0, 200);
+  if (Array.isArray(r.positionen) && r.positionen.length) {
+    const pos = r.positionen.map(x => ({ code: BBHV.items.some(b => b.code === String(x.bbhv)) ? String(x.bbhv) : "", text: String(x.text || "").slice(0, 80), qty: Number(x.anzahl) || 1, price: Number(String(x.einzelpreis).replace(",", ".")) || 0 })).filter(x => x.price > 0);
+    if (pos.length) fields.positions = pos;
+  }
   if (r.patient) {
     const pt = String(r.patient).toLowerCase();
     const p = persons.find(p => p.name && (p.name.toLowerCase().includes(pt) || pt.includes(p.name.toLowerCase().split(" ")[0])));

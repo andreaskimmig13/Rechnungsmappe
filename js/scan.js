@@ -194,12 +194,16 @@ export function parseInvoice(text, persons = []) {
   let kat = "ambulant";
   if (/zahnersatz|krone|implantat|brücke|prothese|kieferorthop|heil- und kostenplan/.test(t)) kat = "zahnersatz";
   else if (/\bgoz\b|zahnarzt|zahnärzt/.test(t)) kat = /prophylaxe|zahnreinigung|pzr/.test(t) ? "vorsorge" : "zahn";
-  else if (/physiotherap|krankengymnastik|manuelle therapie|massage|logopäd|ergotherap|lymphdrainage|osteopath/.test(t)) kat = "heilmittel";
+  else if (/logopäd|sprachtherap|sprechtherap|stimmtherap|schlucktherap/.test(t)) kat = "logopaedie";
+  else if (/ergotherap|hirnleistungstraining/.test(t)) kat = "ergotherapie";
+  else if (/physiotherap|krankengymnastik|manuelle therapie|massage|lymphdrainage|osteopath/.test(t)) kat = "heilmittel";
   else if (/apotheke|pzn/.test(t)) kat = "arznei";
   else if (/brille|brillengläser|kontaktlinse|optik/.test(t)) kat = "sehhilfe";
   else if (/krankenhaus|klinikum|stationär|wahlleistung|fallpauschale|drg/.test(t)) kat = "stationaer";
   else if (/impfung|impfstoff|vorsorgeuntersuchung|früherkennung|check-up|u\d{1,2}\b|j1\b/.test(t)) kat = "vorsorge";
   out.fields.kategorie = kat; out.sure.kategorie = false;
+
+  if (kat === "logopaedie" || kat === "ergotherapie") { const pos = parsePositions(lines, kat); if (pos.length) { out.fields.positions = pos; out.sure.positions = false; } }
 
   // Person: zuerst in der Patientenzeile suchen, dann im ganzen Text
   const patLine = lines.find(l => /patient|behandelte person|für:/i.test(l)) || "";
@@ -214,3 +218,44 @@ export function parseInvoice(text, persons = []) {
 }
 
 export const CAT_KEYS = CATS.map(c => c.k);
+
+// Leistungspositionen (Logopädie/Ergotherapie) der BBhV-Nummer zuordnen und zusammenfassen
+export function guessCode(text, kat) {
+  const t = text.toLowerCase();
+  const min = Number((t.match(/(\d{2,3})\s*(?:min|minuten)/) || [])[1]) || 0;
+  if (/hausbesuch/.test(t)) return "83";
+  if (kat === "logopaedie") {
+    if (/erstdiagnost|erstbefund|erstuntersuch|eingangsdiagnost/.test(t)) return "47";
+    if (/bedarfsdiagnost|verlaufsdiagnost/.test(t)) return "48";
+    if (/bericht/.test(t)) return "49";
+    if (/grupp/.test(t)) return min >= 90 ? "52d" : "52b";
+    if (/einzel|behandlung|therapie/.test(t)) return min >= 60 ? "51c" : min && min <= 30 ? "51a" : "51b";
+  } else {
+    if (/funktionsanalyse|erstgespräch|befunderhebung/.test(t)) return "53";
+    if (/hirnleistung|neuropsych/.test(t)) return "58";
+    if (/psychisch/.test(t)) return "54c";
+    if (/sensomotor|perzept/.test(t)) return "54b";
+    if (/motorisch|einzel|behandlung/.test(t)) return min >= 75 ? "54c" : min >= 60 ? "54b" : "54a";
+  }
+  return "";
+}
+
+export function parsePositions(lines, kat) {
+  const KEY = kat === "logopaedie" ? /(diagnost|befund|einzel|grupp|behandlung|therapie|bericht|hausbesuch)/i : /(funktionsanalyse|erstgespräch|einzel|grupp|behandlung|therapie|hirnleistung|hausbesuch)/i;
+  const groups = new Map();
+  for (const l of lines) {
+    if (!KEY.test(l) || /summe|gesamt|rechnungsbetrag|zu zahlen|mwst|ust/i.test(l)) continue;
+    const amts = [...l.matchAll(AMT)].map(m => parseAmt(m[1])).filter(x => x > 0 && x < 2000);
+    if (!amts.length) continue;
+    let qty = Number((l.match(/(?:^|\s)(\d{1,2})\s*(?:x|×|mal)\s/i) || [])[1]) || 0;
+    let price, total = amts.at(-1);
+    if (amts.length >= 2 && amts[0] <= total) { price = amts[0]; if (!qty) qty = Math.max(1, Math.round(total / price)); }
+    else { if (!qty) qty = 1; price = Math.round(total / qty * 100) / 100; }
+    const code = guessCode(l, kat);
+    const key = code + "|" + price;
+    const g = groups.get(key) || { code, text: l.replace(AMT, "").replace(/\s{2,}/g, " ").trim().slice(0, 80), qty: 0, price };
+    g.qty += qty;
+    groups.set(key, g);
+  }
+  return [...groups.values()];
+}

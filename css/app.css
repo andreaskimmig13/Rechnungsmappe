@@ -129,6 +129,16 @@ button { cursor: pointer; }
 .bk-calc { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: baseline; color: var(--muted); padding: 4px 0; }
 .bk-sum { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 12px 16px; font-size: 13px; font-weight: 600; background: var(--ground); }
 
+/* Leistungspositionen */
+.pos { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; border: 1px solid var(--line); }
+.pos.pos-cut { border-color: var(--warn-line); background: var(--warn-soft); }
+.pos select { width: 100%; min-height: 44px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-size: 15px; }
+.pos-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+.pf { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pf span { font-size: 12px; font-weight: 600; color: var(--muted); }
+.pf input { width: 100%; min-height: 44px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font: 15px var(--f-mono); }
+.warn-t { color: var(--warn); }
+
 /* Balken */
 .bars { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; align-items: end; height: 150px; border-bottom: 1px solid var(--line); padding-top: 22px; }
 .bar { position: relative; border-radius: 3px; background: var(--hatch); }

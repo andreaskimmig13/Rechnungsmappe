@@ -5,17 +5,65 @@ export const CATS = [
   { k: "ambulant", l: "Arzt (ambulant)" },
   { k: "zahn", l: "Zahnbehandlung" },
   { k: "zahnersatz", l: "Zahnersatz / Kieferorthopädie" },
-  { k: "heilmittel", l: "Heilmittel (Physio, Logopädie …)" },
+  { k: "heilmittel", l: "Heilmittel (Physio, Massage …)" },
+  { k: "logopaedie", l: "Logopädie" },
+  { k: "ergotherapie", l: "Ergotherapie" },
   { k: "arznei", l: "Arzneimittel" },
   { k: "hilfsmittel", l: "Hilfsmittel" },
   { k: "sehhilfe", l: "Brille / Kontaktlinsen" },
   { k: "stationaer", l: "Krankenhaus" },
   { k: "vorsorge", l: "Vorsorge, Impfung, Prophylaxe" },
 ];
+// Höchstbeträge nach Anlage 9 BBhV (zu § 23 Abs. 1), gültig ab 01.02.2026.
+// Signal Iduna erstattet Logopädie und Ergotherapie nur bis zu diesen Beträgen.
+export const BBHV = {
+  valid: "2026-02-01",
+  items: [
+    { code: "47", cat: "logopaedie", l: "Erstdiagnostik", max: 117.30 },
+    { code: "48", cat: "logopaedie", l: "Bedarfsdiagnostik", max: 58.70 },
+    { code: "49", cat: "logopaedie", l: "Bericht an die verordnende Person", max: 6.60 },
+    { code: "51a", cat: "logopaedie", l: "Einzelbehandlung 30 Min.", max: 52.20 },
+    { code: "51b", cat: "logopaedie", l: "Einzelbehandlung 45 Min.", max: 71.70 },
+    { code: "51c", cat: "logopaedie", l: "Einzelbehandlung 60 Min.", max: 91.30 },
+    { code: "52a", cat: "logopaedie", l: "Gruppe, 2 Personen, 45 Min.", max: 64.50 },
+    { code: "52b", cat: "logopaedie", l: "Gruppe, 3–5 Personen, 45 Min.", max: 35.60 },
+    { code: "52c", cat: "logopaedie", l: "Gruppe, 2 Personen, 90 Min.", max: 117.30 },
+    { code: "52d", cat: "logopaedie", l: "Gruppe, 3–5 Personen, 90 Min.", max: 58.70 },
+    { code: "53", cat: "ergotherapie", l: "Funktionsanalyse und Erstgespräch", max: 47.70 },
+    { code: "54a", cat: "ergotherapie", l: "Einzel, motorisch-funktionell 45 Min.", max: 57.00 },
+    { code: "54b", cat: "ergotherapie", l: "Einzel, sensomotorisch-perzeptiv 60 Min.", max: 76.00 },
+    { code: "54c", cat: "ergotherapie", l: "Einzel, psychisch-funktionell 75 Min.", max: 94.90 },
+    { code: "58", cat: "ergotherapie", l: "Hirnleistungstraining 45 Min.", max: 57.00 },
+    { code: "83", cat: "both", l: "Hausbesuch inkl. Wegegeld", max: 27.60 },
+    { code: "84", cat: "both", l: "Besuch in Einrichtung je Person", max: 18.00 },
+  ],
+};
+export const CAPPED_CATS = ["logopaedie", "ergotherapie"];
+export const bbhvItem = code => BBHV.items.find(x => x.code === String(code || ""));
+export const capsOf = p => p.caps ?? (p.presetId === "signal-exklusiv1" ? "bbhv" : null);
+
+// Positionen einer Rechnung gegen die Höchstbeträge prüfen
+export function positionCheck(p, inv) {
+  const pos = Array.isArray(inv.positions) ? inv.positions : [];
+  const amount = Number(inv.betrag) || 0;
+  if (!pos.length) return { billed: 0, recognized: 0, capCut: 0, rest: amount, rows: [] };
+  const capped = capsOf(p) === "bbhv" && CAPPED_CATS.includes(inv.kategorie);
+  const rows = pos.map(x => {
+    const qty = Number(x.qty) || 0, price = Number(x.price) || 0;
+    const item = capped ? bbhvItem(x.code) : null;
+    const max = item && (item.cat === inv.kategorie || item.cat === "both") ? item.max : null;
+    const unit = max != null ? Math.min(price, max) : price;
+    return { ...x, qty, price, max, billed: qty * price, recognized: qty * unit, cut: qty * (price - unit) };
+  });
+  const billed = rows.reduce((a, r) => a + r.billed, 0);
+  const recognized = rows.reduce((a, r) => a + r.recognized, 0);
+  return { billed, recognized, capCut: billed - recognized, rest: Math.max(0, amount - billed), rows, capped };
+}
+
 export const catLabel = k => (CATS.find(c => c.k === k) || { l: k || "–" }).l;
 export const isDental = k => k === "zahn" || k === "zahnersatz";
 
-const rates = (over = {}) => ({ ambulant: 100, zahn: 100, zahnersatz: 90, heilmittel: 100, arznei: 100, hilfsmittel: 100, sehhilfe: 100, stationaer: 100, vorsorge: 100, ...over });
+const rates = (over = {}) => ({ ambulant: 100, zahn: 100, zahnersatz: 90, heilmittel: 100, logopaedie: 100, ergotherapie: 100, arznei: 100, hilfsmittel: 100, sehhilfe: 100, stationaer: 100, vorsorge: 100, ...over });
 
 export const PRESETS = [
   {
@@ -27,7 +75,7 @@ export const PRESETS = [
   {
     id: "signal-exklusiv1", insurer: "Signal Iduna", tariff: "EXKLUSIV 1", deadlines: "signal",
     adult: { sb: 480 }, child: { sb: 240 },
-    common: { breFix: 0, sbDental: false, sbQuarterRule: true, breMonate: 1, breVariableFirstYear: true, breEstimated: true, basisPct: 80, offset: false, rates: rates({ heilmittel: 80 }) },
+    common: { breFix: 0, sbDental: false, sbQuarterRule: true, breMonate: 1, breVariableFirstYear: true, breEstimated: true, basisPct: 80, offset: false, rates: rates({ heilmittel: 80, logopaedie: 80, ergotherapie: 80 }), caps: "bbhv" },
     note: "Selbstbehalt gilt nur für ambulant und stationär, nicht für Zahnleistungen. Die erfolgsabhängige BRE legt Signal Iduna jedes Jahr neu fest (Kinder: die Hälfte).",
   },
   {
@@ -65,11 +113,13 @@ export function calc(p, invoices, year, taxRatePct) {
   const inv = invoices.filter(i => i.personId === p.id && yearOf(i) === year);
   const regular = inv.filter(i => i.kategorie !== "vorsorge");
   const neutral = inv.filter(i => i.kategorie === "vorsorge");
-  const rate = i => num(p.rates?.[i.kategorie] ?? 100) / 100;
+  const rate = i => num(p.rates?.[i.kategorie] ?? (CAPPED_CATS.includes(i.kategorie) ? p.rates?.heilmittel : undefined) ?? 100) / 100;
+  // Erstattungsfähiger Betrag: bei Positionen mit Höchstbetrag gekappt
+  const base = i => { const pc = positionCheck(p, i); return { pc, base: pc.rows.length ? Math.min(num(i.betrag), pc.recognized + pc.rest) : num(i.betrag) }; };
   const sbApplies = i => p.sbDental !== false || !isDental(i.kategorie);
   const total = inv.reduce((a, i) => a + num(i.betrag), 0);
-  const eligibleSb = regular.filter(sbApplies).reduce((a, i) => a + num(i.betrag) * rate(i), 0);
-  const eligibleFree = regular.filter(i => !sbApplies(i)).reduce((a, i) => a + num(i.betrag) * rate(i), 0);
+  const eligibleSb = regular.filter(sbApplies).reduce((a, i) => a + base(i).base * rate(i), 0);
+  const eligibleFree = regular.filter(i => !sbApplies(i)).reduce((a, i) => a + base(i).base * rate(i), 0);
   const eligible = eligibleSb + eligibleFree;
   const neutralRefund = neutral.reduce((a, i) => a + num(i.betrag) * rate(i), 0);
   const fy = firstYearInfo(p, year);
@@ -83,10 +133,11 @@ export function calc(p, invoices, year, taxRatePct) {
   // Aufschlüsselung je Rechnung: Selbstbehalt chronologisch verrechnen
   let sbRemaining = sb;
   const lines = [...regular].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
-    const amount = num(i.betrag), r = rate(i), elig = amount * r;
+    const amount = num(i.betrag), r = rate(i), b = base(i), elig = b.base * r;
     const sbPart = sbApplies(i) ? Math.min(sbRemaining, elig) : 0;
     sbRemaining -= sbPart;
-    return { inv: i, amount, rate: r, eligible: elig, notCovered: amount - elig, sbPart, refund: elig - sbPart, sbFree: !sbApplies(i) };
+    const capCut = amount - b.base;
+    return { inv: i, amount, rate: r, eligible: elig, capCut, rateCut: b.base - elig, notCovered: amount - elig, sbPart, refund: elig - sbPart, sbFree: !sbApplies(i), pc: b.pc };
   });
   const neutralLines = [...neutral].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
     const amount = num(i.betrag), r = rate(i), elig = amount * r;
@@ -94,6 +145,7 @@ export function calc(p, invoices, year, taxRatePct) {
   });
   const sbUsed = sb - sbRemaining;
   const notCovered = lines.reduce((a, l) => a + l.notCovered, 0);
+  const capCut = lines.reduce((a, l) => a + l.capCut, 0);
   const regularTotal = lines.reduce((a, l) => a + l.amount, 0);
   const submitted = regular.filter(i => i.eingereicht);
   const unsubmitted = regular.filter(i => !i.eingereicht);
@@ -113,7 +165,7 @@ export function calc(p, invoices, year, taxRatePct) {
   const threshold = eligible + rest;
   const submitWins = p.offset || breLost || payout > breNet;
   const best = breLost ? payout : Math.max(payout, breNet);
-  return { lines, neutralLines, sbUsed, notCovered, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
+  return { lines, neutralLines, sbUsed, notCovered, capCut, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
     rest, threshold, fy, verdict, tone, submitted, unsubmitted, breLost, submitWins, best };
 }
 
