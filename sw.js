@@ -1,12 +1,11 @@
 // Service Worker: macht die App offline nutzbar. Er speichert nur Programmdateien,
 // niemals Rechnungen (die liegen verschlüsselt in IndexedDB).
-const VERSION = "rm-1.3.0";
+const VERSION = "rm-2.0.0";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/app.css",
   "js/app.js", "js/store.js", "js/calc.js", "js/scan.js", "js/ai.js", "js/exporter.js",
   "vendor/pdf-lib.min.js", "vendor/pdfjs/pdf.min.mjs", "vendor/pdfjs/pdf.worker.min.mjs",
-  "assets/fonts/BricolageGrotesque-Bold.ttf", "assets/fonts/InstrumentSans-Regular.ttf", "assets/fonts/InstrumentSans-Bold.ttf",
-  "assets/fonts/IBMPlexMono-Regular.ttf", "assets/fonts/IBMPlexMono-Bold.ttf",
+  "assets/fonts/InstrumentSans-Regular.ttf", "assets/fonts/InstrumentSans-Bold.ttf",
   "assets/icons/icon-192.png", "assets/icons/icon-512.png", "assets/icons/maskable-512.png",
 ];
 const RUNTIME = "rm-libs-v1";   // Texterkennung (einmal geladen, dann offline)

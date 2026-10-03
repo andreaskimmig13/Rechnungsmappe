@@ -4,7 +4,7 @@ import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "2.0.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -32,6 +32,16 @@ const I = {
   share: '<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   dl: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  up: '<path d="M12 15V3M7 8l5-5 5 5M5 14v6h14v-6"/>',
+  doc: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/>',
+  tooth: '<path d="M7 3c-2.2 0-4 1.8-4 4.3 0 3 1.4 4.4 2 7.7.4 2.4.8 6 2.5 6 1.6 0 1.6-4.5 4.5-4.5s2.9 4.5 4.5 4.5c1.7 0 2.1-3.6 2.5-6 .6-3.3 2-4.7 2-7.7C21 4.8 19.2 3 17 3c-2 0-3 1-5 1S9 3 7 3z"/>',
+  hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V11M11 10V4.5a1.5 1.5 0 0 1 3 0V11M14 10.5V6a1.5 1.5 0 0 1 3 0v8a7 7 0 0 1-7 7 6 6 0 0 1-5.2-3L3.5 15.3a1.5 1.5 0 0 1 2.6-1.5L8 16"/>',
+  pill: '<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M12 8v8"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  bed: '<path d="M3 7v12M3 13h18v6M21 13a3 3 0 0 0-3-3h-8v3"/><circle cx="7" cy="11" r="1.5"/>',
+  shield: '<path d="M12 3 5 6v6c0 4 3 7.5 7 9 4-1.5 7-5 7-9V6z"/><path d="m9 12 2 2 4-4"/>',
+  speech: '<path d="M4 5h16v11H9l-5 4z"/>',
+  crutch: '<path d="M8 3h8M12 3v18M9 21h6M9 9h6"/>',
 };
 const ic = (n, s = 24, extra = "") => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${I[n]}</svg>`;
 
@@ -82,18 +92,51 @@ const confirmBox = (title, text, label = "OK", danger = false) =>
   modal({ title, body: `<p>${text}</p>`, actions: [{ label: "Abbrechen", value: false }, { label, value: true, primary: !danger, danger }] });
 
 function nav(active) {
-  const item = (href, icon, label, key) => `<a href="${href}" class="nav-i ${active === key ? "on" : ""}" ${active === key ? 'aria-current="page"' : ""}>${ic(icon)}<span>${label}</span></a>`;
+  const item = (href, icon, label, key) => `<a href="${href}" class="nav-i ${active === key ? "on" : ""}" ${active === key ? 'aria-current="page"' : ""}>${ic(icon, 22)}<span>${label}</span></a>`;
   return `<nav class="nav" aria-label="Hauptmenü">
     ${item("#/", "home", "Übersicht", "home")}
     ${item("#/rechnungen", "list", "Rechnungen", "list")}
-    <a href="#/neu" class="nav-scan" aria-label="Rechnung erfassen">${ic("cam", 28)}</a>
+    <a href="#/neu" class="nav-add" aria-label="Rechnung erfassen"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></a>
     ${item("#/fristen", "cal", "Fristen", "cal")}
     ${item("#/einstellungen", "set", "Einstellungen", "set")}
   </nav>`;
 }
-const header = (title, { back, right = "", sub = "" } = {}) => `<header class="top ${back ? "with-back" : ""}">
-  ${back ? `<a class="icon-btn" href="${back}" aria-label="Zurück">${ic("back")}</a>` : ""}
-  <div class="top-t">${sub ? `<span class="eyebrow">${esc(sub)}</span>` : ""}<h1>${esc(title)}</h1></div>${right}</header>`;
+const header = (title, { back, right = "", sub = "", lead = "" } = {}) => `<header class="top ${back ? "with-back" : ""}">
+  ${back ? `<a class="icon-btn" href="${back}" aria-label="Zurück">${ic("back", 22)}</a>` : ""}${lead}
+  <div class="top-t"><h1>${esc(title)}</h1>${sub ? `<span class="sub">${esc(sub)}</span>` : ""}</div>${right}</header>`;
+
+// ---------- Kleine Darstellungshelfer ----------
+const MONTHS = ["Jan", "Feb", "März", "Apr", "Mai", "Juni", "Juli", "Aug", "Sep", "Okt", "Nov", "Dez"];
+const MONTHS_L = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+const fmtEur0 = n => Math.round(Number(n) || 0).toLocaleString("de-DE") + " €";
+const dShort = iso => iso ? `${Number(iso.slice(8, 10))}. ${MONTHS_L[Number(iso.slice(5, 7)) - 1]}` : "";
+const dLong = iso => iso ? `${dShort(iso)} ${iso.slice(0, 4)}` : "";
+const refundOpen = i => i.eingereicht && (i.erstattet === null || i.erstattet === undefined || i.erstattet === "");
+function initials(name) {
+  const w = String(name || "?").trim().split(/\s+/);
+  if (w[1] && /^\d+$/.test(w[1])) return (w[0][0] + w[1]).toUpperCase();
+  return (w[0][0] + (w[1]?.[0] || "")).toUpperCase();
+}
+const avatar = (p, sm = false) => `<span class="av ${sm ? "sm" : ""} c${Math.max(0, S.persons.indexOf(p)) % 4}" aria-hidden="true">${esc(initials(p?.name))}</span>`;
+function statusOf(i) {
+  if (i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "") return { cls: "good", label: `erstattet ${fmtEur(i.erstattet)}` };
+  if (i.eingereicht) return { cls: "acc", label: "eingereicht" };
+  if (!i.bezahlt && i.faellig && i.faellig < today()) return { cls: "bad", label: "überfällig" };
+  if (!i.bezahlt) return { cls: "warn", label: i.faellig ? `zahlen bis ${fmtShort(i.faellig)}` : "offen" };
+  return { cls: "muted", label: "bezahlt" };
+}
+const CAT_IC = { ambulant: "doc", zahn: "tooth", zahnersatz: "tooth", zahnprophylaxe: "tooth", heilmittel: "hand", logopaedie: "speech", ergotherapie: "hand", arznei: "pill", hilfsmittel: "crutch", sehhilfe: "eye", stationaer: "bed", vorsorge: "shield" };
+function yearSeg() {
+  const now = new Date().getFullYear();
+  const ys = [...new Set([now, ui.year, ...S.invoices.map(yearOf)])].sort((a, b) => a - b);
+  if (ys.length > 3) return `<label class="year-sel"><span class="sr">Jahr</span><select id="year">${[...ys].reverse().map(y => `<option value="${y}" ${y === ui.year ? "selected" : ""}>${y}</option>`).join("")}</select></label>`;
+  if (ys.length === 1) ys.unshift(now - 1);
+  return `<div class="seg" role="group" aria-label="Jahr">${ys.map(y => `<button type="button" data-year="${y}" aria-pressed="${y === ui.year}">${y}</button>`).join("")}</div>`;
+}
+function bindYear(rerender) {
+  $$("[data-year]").forEach(b => b.onclick = () => { ui.year = Number(b.dataset.year); rerender(); });
+  const sel = $("#year"); if (sel) sel.onchange = e => { ui.year = Number(e.target.value); rerender(); };
+}
 
 function page(html, active) {
   root.innerHTML = `<div class="screen">${html}</div>${active !== undefined ? nav(active) : ""}`;
@@ -222,34 +265,8 @@ function setupPeople() {
 }
 
 // ---------- Übersicht ----------
-function yearOptions() {
-  const ys = new Set([new Date().getFullYear(), ui.year, ...S.invoices.map(yearOf)]);
-  return [...ys].sort((a, b) => b - a).map(y => `<option value="${y}" ${y === ui.year ? "selected" : ""}>${y}</option>`).join("");
-}
-
-function gauge(r) {
-  const max = Math.max(r.threshold, r.eligible, r.sb, 1) * 1.08;
-  const pct = v => Math.min(100, v / max * 100).toFixed(1);
-  return `<div class="gauge" role="img" aria-label="Erstattungsfähig ${fmtEur(r.eligible)} von Schwelle ${fmtEur(r.threshold)}">
-    <div class="g-sb" style="width:${pct(r.sb)}%"></div><div class="g-fill" style="width:${pct(r.eligible)}%"></div><div class="g-mark" style="left:${pct(r.threshold)}%"></div></div>`;
-}
-
-// Rechenweg: Rechnungssumme → nicht erstattet → Selbstbehalt → Erstattung
-function waterfall(r, { compact = false } = {}) {
-  const row = (label, val, cls = "") => `<div class="wf-r ${cls}"><span>${label}</span><span class="num">${val}</span></div>`;
-  const n = r.lines.length;
-  return `<div class="wf">
-    ${row(`Rechnungen ${ui.year} (${n} Stück)`, fmtEur(r.regularTotal))}
-    ${r.capCut > 0.004 ? row("− über Höchstbetrag (Beihilfe-Liste)", fmtEur(r.capCut), "minus") : ""}
-    ${r.notCovered - r.capCut - r.dentalCut > 0.004 || !compact ? row("− nicht erstattet (Tarif unter 100 %)", fmtEur(r.notCovered - r.capCut - r.dentalCut), "minus") : ""}
-    ${r.dentalCut > 0.004 ? row("− über Zahn-Höchstbetrag (erste Jahre)", fmtEur(r.dentalCut), "minus") : ""}
-    ${row(`− Selbstbehalt${r.sb > r.sbUsed + 0.004 ? ` (${fmtEur(r.sb - r.sbUsed)} noch offen)` : ""}`, fmtEur(r.sbUsed), "minus")}
-    ${row("= Erstattung bei Einreichung", fmtEur(r.payout), "sum")}
-    ${r.neutralLines.length ? row(`+ Vorsorge/Impfung (${r.neutralLines.length}), BRE-neutral`, fmtEur(r.neutralRefund), "extra") : ""}
-  </div>`;
-}
-
-function dentalBudget(p, r, { full = false } = {}) {
+// Zahn-Budget als Ring-Zeile
+function dentalRow(p, r, { full = false } = {}) {
   const d = r.dental;
   if (!d.caps || !d.startYear) return "";
   const hasDental = S.invoices.some(i => i.personId === p.id && isDental(i.kategorie));
@@ -257,39 +274,62 @@ function dentalBudget(p, r, { full = false } = {}) {
   if (!full && !hasDental) return "";
   const used = d.usedBefore + d.usedThis;
   const pct = Math.min(100, used / d.limit * 100);
-  const tone = d.remaining <= 0.004 ? "bad" : d.remaining < d.limit * 0.25 ? "warn" : "ok";
-  return `<div class="budget ${tone}">
-    <div class="split"><span class="eyebrow">Zahn-Budget ${r.fy.first ? "1. Versicherungsjahr" : `bis Ende ${ui.year}`}</span><span class="num small strong">noch ${fmtEur(d.remaining)}</span></div>
-    <div class="bud-bar"><div style="width:${pct.toFixed(1)}%"></div></div>
-    <div class="split xs muted"><span>genutzt ${fmtEur(used)}${d.usedBefore > 0.004 ? ` (davon Vorjahre ${fmtEur(d.usedBefore)})` : ""}</span><span>Grenze ${fmtEur(d.limit)}</span></div>
-    ${full ? `<p class="xs muted">Versicherungsjahr ${d.idx} von ${d.caps.length} mit Begrenzung. Die Grenzen gelten zusammengerechnet seit Versicherungsbeginn: ${d.caps.map((c, n) => `bis Ende ${d.startYear + n}: ${fmtEur(c)}`).join(" · ")}. Ab ${d.endsYear} unbegrenzt. Unfallfolgen zählen nicht mit.${d.usedBefore > 0 ? "" : " Vorjahre zählen nur mit eingereichten Rechnungen."}</p>` : ""}
-    ${d.cutThis > 0.004 ? `<p class="xs bad-t">${fmtEur(d.cutThis)} ${ui.year} über der Grenze – wird nicht erstattet.</p>` : ""}
-  </div>`;
+  const col = d.remaining <= 0.004 ? "var(--bad-dot)" : d.remaining < d.limit * .25 ? "var(--warn-dot)" : "var(--acc)";
+  return `<section class="card stack-s">
+    <div class="row-s" style="gap:14px">
+      <div class="ring" style="background:conic-gradient(${col} ${pct * 3.6}deg, var(--line) 0)" aria-hidden="true"><span>${Math.round(pct)} %</span></div>
+      <div class="row-t"><b style="white-space:normal">Zahn-Budget</b><span class="xs muted">${fmtEur(d.remaining)} frei bis Ende ${ui.year} · genutzt ${fmtEur(used)} von ${fmtEur(d.limit)}</span></div>
+    </div>
+    ${d.cutThis > 0.004 ? `<p class="xs bad-t">${fmtEur(d.cutThis)} liegen ${ui.year} über der Grenze und werden nicht erstattet.</p>` : ""}
+    ${full ? `<p class="xs muted">Zusammengerechnet seit Versicherungsbeginn: ${d.caps.map((c, n) => `bis Ende ${d.startYear + n} ${fmtEur0(c)}`).join(" · ")}. Ab ${d.endsYear} unbegrenzt. Unfallfolgen zählen nicht mit, Vorjahre nur mit eingereichten Rechnungen.</p>` : ""}
+  </section>`;
 }
 
-function personCard(p, r) {
-  const y = ui.year;
-  const head = `<div class="pc-head"><div><a class="pc-name" href="#/jahr/${p.id}/${y}">${esc(p.name)}</a><span class="muted small">${esc(p.insurer)} · ${esc(p.tariff)}</span></div><span class="pill ${r.fy.before ? "muted" : r.tone}">${esc(r.verdict)}</span></div>`;
-  if (r.fy.before) return `<article class="card pcard">${head}</article>`;
-  const breLine = r.breLost ? "entfällt, da eingereicht" : `${fmtEur(r.bre)} − ${fmtEur(r.breTax)} Steuer`;
-  const open = `<a class="btn sm" href="#/jahr/${p.id}/${y}">${ic("list", 18)} Rechnungen ansehen</a>`;
-  if (r.regular.length === 0 && !p.offset) return `<article class="card pcard">
-    ${head}
-    ${gauge(r)}
-    <div class="split small muted"><span>${r.neutral.length ? `${r.neutral.length} Vorsorge-Rechnung(en), BRE-neutral` : `Keine Rechnungen ${y}`}</span><span>BRE netto <b class="num good-t">${fmtEur(r.breNet)}</b></span></div>
-    ${dentalBudget(p, r)}
-    ${r.inv.length ? open : ""}
-  </article>`;
-  return `<article class="card pcard">
-    ${head}
-    ${waterfall(r, { compact: true })}
-    <div class="vs ${r.submitWins ? "" : "win"}"><span><span class="eyebrow">BRE nach Steuer</span><span class="xs muted">wenn du nichts einreichst · ${breLine}</span></span><span class="num big-n">${fmtEur(r.breLost ? 0 : r.breNet)}</span></div>
-    <div class="stack-s">${gauge(r)}<div class="split xs muted"><span>Erstattungsfähig <b class="num ink">${fmtEur(r.eligible)}</b></span><span>Schwelle <b class="num ink">${fmtEur(r.threshold)}</b></span></div></div>
-    ${dentalBudget(p, r)}
-    ${!r.submitWins ? `<p class="small">Noch <b class="num">${fmtEur(r.rest)}</b> an Kosten, bis sich Einreichen lohnt. Bis dahin selbst zahlen.</p>` : ""}
-    <div class="row-btns">${open}${r.submitWins && r.unsubmitted.length ? `<a class="btn sm primary" href="#/paket/${p.id}/${y}">${ic("share", 18)} Einreichungspaket (${r.unsubmitted.length})</a>` : ""}</div>
-    ${r.fy.first ? `<p class="xs muted">Erstes Versicherungsjahr: BRE anteilig für ${r.fy.months} Monate${r.fy.sbFactor < 1 ? ", Selbstbehalt gekürzt" : ""}.</p>` : ""}
-  </article>`;
+// Was bringt welche Wahl? (für Übersicht und Detail)
+function choiceOf(p, r) {
+  if (r.fy.before) return { amount: 0, label: "noch nicht versichert", tone: "muted", choice: "none" };
+  if (r.breLost) return { amount: r.payout + r.neutralRefund, label: "einreichen", tone: "bad", choice: "submit" };
+  if (p.offset || r.submitWins) return { amount: r.payout + r.neutralRefund, label: "Erstattung", tone: "good", choice: "submit" };
+  if (!r.regular.length) return { amount: r.breNet + r.neutralRefund, label: "leistungsfrei", tone: "good", choice: "keep" };
+  return { amount: r.breNet + r.neutralRefund, label: "Rückerstattung", tone: "good", choice: "keep" };
+}
+
+function personRow(p, r) {
+  const y = ui.year, c = choiceOf(p, r);
+  let detail = "";
+  if (r.regular.length && !r.fy.before) {
+    if (r.breLost) detail = `<div class="bar-t bad"><div style="width:100%"></div></div><span class="xs muted">Schon eingereicht – Rückerstattung entfällt, alle Rechnungen ${y} einreichen</span>`;
+    else if (p.offset) detail = `<span class="xs muted">${fmtEur0(r.eligible)} erstattungsfähig – Rückerstattung bleibt trotzdem</span>`;
+    else if (r.submitWins) detail = `<div class="bar-t good"><div style="width:100%"></div></div><span class="xs muted">${fmtEur0(r.eligible)} erstattungsfähig – Einreichen lohnt sich${r.unsubmitted.length ? ` (${r.unsubmitted.length} offen)` : ""}</span>`;
+    else detail = `<div class="bar-t"><div style="width:${Math.min(100, r.eligible / Math.max(1, r.threshold) * 100).toFixed(1)}%"></div></div><span class="xs muted">${fmtEur0(r.eligible)} von ${fmtEur0(r.threshold)} – Einreichen lohnt sich noch nicht</span>`;
+  }
+  const d = r.dental;
+  const dental = d.active && S.invoices.some(i => i.personId === p.id && isDental(i.kategorie) && yearOf(i) <= y)
+    ? `<span class="chip-s">${ic("tooth", 14)} Zahn-Budget: noch ${fmtEur0(d.remaining)}</span>` : "";
+  return `<a class="prow" href="#/jahr/${p.id}/${y}">
+    <div class="prow-h">${avatar(p)}<span class="prow-t"><b>${esc(p.name)}</b><span class="xs muted">${esc(p.insurer)} · ${esc(p.tariff)}</span></span>
+      <span class="prow-v"><b>${c.choice === "none" ? "–" : fmtEur0(c.amount)}</b><span class="xs ${c.tone === "bad" ? "bad-t" : c.tone === "muted" ? "muted" : "good-t"}">${esc(c.label)}</span></span></div>
+    ${detail || dental ? `<div class="prow-d">${detail}${dental}</div>` : ""}
+  </a>`;
+}
+
+// Rechenweg (aufklappbar)
+function calcDetails(p, r, open = false) {
+  const row = (label, val, cls = "") => `<div class="wf-r ${cls}"><span>${label}</span><span class="num">${val}</span></div>`;
+  const other = r.notCovered - r.capCut - r.dentalCut;
+  return `<details class="card calc" ${open ? "open" : ""}><summary>So rechnet die App ${ic("chev", 18)}</summary><div class="wf">
+    ${row(`Rechnungen (${r.lines.length})`, fmtEur(r.regularTotal))}
+    ${r.capCut > 0.004 ? row("über Beihilfe-Höchstbetrag", "− " + fmtEur(r.capCut), "minus") : ""}
+    ${other > 0.004 ? row("nicht erstattet (Satz unter 100 %)", "− " + fmtEur(other), "minus") : ""}
+    ${r.dentalCut > 0.004 ? row("über Zahn-Höchstbetrag", "− " + fmtEur(r.dentalCut), "minus") : ""}
+    ${row(`Selbstbehalt${r.sb > r.sbUsed + 0.004 ? ` (noch ${fmtEur(r.sb - r.sbUsed)} offen)` : ""}`, "− " + fmtEur(r.sbUsed), "minus")}
+    ${row("Erstattung bei Einreichung", fmtEur(r.payout), "sum")}
+    ${r.neutralLines.length ? row(`zusätzlich Vorsorge/Prophylaxe (${r.neutralLines.length})`, "+ " + fmtEur(r.neutralRefund), "extra") : ""}
+    ${row("Rückerstattung brutto", fmtEur(r.bre), "sub-h")}
+    ${row(`davon Steuer (${S.settings.taxRate} % auf ${p.basisPct} %)`, "− " + fmtEur(r.breTax), "minus")}
+    ${row("Rückerstattung nach Steuer", fmtEur(r.breNet), "sum")}
+    ${r.fy.first ? `<p class="xs muted" style="padding-top:6px">Erstes Versicherungsjahr: Rückerstattung anteilig für ${r.fy.months} Monate${r.fy.sbFactor < 1 ? ", Selbstbehalt gekürzt" : ""}.</p>` : ""}
+  </div></details>`;
 }
 
 // Voraussichtliche Erstattung je Rechnung (für Liste und Detail)
@@ -304,94 +344,111 @@ function expectedFor(invoices = S.invoices) {
 }
 
 // ---------- Aufschlüsselung pro Person und Jahr ----------
+function invRow(l) {
+  const i = l.inv, st = statusOf(i);
+  const notes = [];
+  if (l.capCut > 0.004) notes.push(`Höchstbetrag −${fmtEur(l.capCut)}`);
+  if (l.rateCut > 0.004) notes.push(`Satz ${Math.round(l.rate * 100)} % −${fmtEur(l.rateCut)}`);
+  if (l.dentalCut > 0.004) notes.push(`Zahn-Budget −${fmtEur(l.dentalCut)}`);
+  if (l.sbPart > 0.004) notes.push(`trägt ${fmtEur(l.sbPart)} Selbstbehalt`);
+  if (l.inv.unfall) notes.push("Unfall");
+  return `<a class="row" href="#/rechnung/${i.id}">
+    <span class="row-t"><b>${esc(i.arzt || "Ohne Praxisangabe")}</b><span class="xs muted">${dShort(i.datum)}${notes.length ? " · " + notes.join(" · ") : ""}</span><span class="st ${st.cls}">${esc(st.label)}</span></span>
+    <span class="row-v"><b>${fmtEur(l.amount)}</b><span class="xs ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)} zurück</span></span></a>`;
+}
+
 function viewPersonYear(pid, year) {
   const p = person(pid);
   if (!p) { location.hash = "#/"; return; }
   ui.year = year;
   const r = calc(p, S.invoices, year, S.settings.taxRate);
-  const line = l => `<li><a class="bk" href="#/rechnung/${l.inv.id}">
-    <span class="split top-a"><strong>${esc(l.inv.arzt || "Ohne Praxisangabe")}</strong><span class="num strong nowrap">${fmtEur(l.amount)}</span></span>
-    <span class="xs muted">${fmtDate(l.inv.datum)} · ${esc(l.inv.notiz || catLabel(l.inv.kategorie))}</span>
-    <span class="bk-calc xs"><span>${l.capCut > 0.004 ? `Höchstbetrag −${fmtEur(l.capCut)} · ` : ""}Satz ${Math.round(l.rate * 100)} %${l.rateCut > 0.004 ? ` · −${fmtEur(l.rateCut)}` : ""}${l.dentalCut > 0.004 ? ` · Zahn-Budget −${fmtEur(l.dentalCut)}` : ""}${l.inv.unfall ? " · Unfall" : ""}</span><span>${l.neutral ? "ohne Selbstbehalt" : l.sbFree ? "ohne SB (Zahn)" : l.sbPart > 0.004 ? `SB −${fmtEur(l.sbPart)}` : "SB schon erreicht"}</span><span class="num strong ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)}</span></span>
-    <span class="tags">${stamps(l.inv)}</span>
-  </a></li>`;
-  page(`${header(`${p.name} · ${year}`, { back: "#/", sub: `${p.insurer} · ${p.tariff}` })}
+  const c = choiceOf(p, r);
+  const recSubmit = c.choice === "submit";
+  page(`${header(`${p.name} · ${year}`, { back: "#/", sub: `${p.insurer} · ${p.tariff}`, lead: avatar(p, true) })}
     <main class="main">
-      <section class="card stack">
-        <span class="pill ${r.tone} self-start">${esc(r.verdict)}</span>
-        ${waterfall(r)}
-        <div class="vs ${r.submitWins ? "" : "win"}"><span><span class="eyebrow">BRE nach Steuer</span><span class="xs muted">${r.breLost ? "entfällt, da schon eingereicht" : `${fmtEur(r.bre)} brutto − ${fmtEur(r.breTax)} Steuer`}</span></span><span class="num big-n">${fmtEur(r.breLost ? 0 : r.breNet)}</span></div>
+      <section class="choice">
+        <div class="ch ${recSubmit ? "rec" : ""}">${recSubmit ? `<span class="badge">Empfohlen</span>` : ""}<span class="sub">Einreichen</span><b>${fmtEur(r.payout)}</b><span class="xs muted">Erstattung nach Selbstbehalt</span></div>
+        <div class="ch ${!recSubmit && c.choice !== "none" ? "rec" : ""}">${!recSubmit && c.choice !== "none" ? `<span class="badge">Empfohlen</span>` : ""}<span class="sub">Selbst zahlen</span><b class="${r.breLost ? "muted" : "good-t"}">${fmtEur(r.breLost ? 0 : r.breNet)}</b><span class="xs muted">${r.breLost ? "entfällt – schon eingereicht" : "Rückerstattung nach Steuer"}</span></div>
       </section>
-      ${dentalBudget(p, r, { full: true }) ? `<section class="card">${dentalBudget(p, r, { full: true })}</section>` : ""}
+      ${r.regular.length && !r.submitWins && !r.breLost ? `<section class="card stack-s"><div class="bar-t"><div style="width:${Math.min(100, r.eligible / Math.max(1, r.threshold) * 100).toFixed(1)}%"></div></div>
+        <span class="small" style="color:var(--ink2)">Einreichen lohnt sich ab <b>${fmtEur0(r.threshold)}</b> erstattungsfähigen Kosten. Es fehlen noch ${fmtEur0(r.rest)}.</span></section>` : ""}
+      ${r.submitWins && r.unsubmitted.length ? `<a class="btn primary big" href="#/paket/${p.id}/${year}">${ic("share", 20)} Einreichungspaket erstellen (${r.unsubmitted.length})</a>` : ""}
+      ${calcDetails(p, r)}
+      ${dentalRow(p, r, { full: true })}
       <section class="stack-s">
-        <div class="split"><h2 class="h3">Rechnungen ${year}</h2><span class="xs muted">Selbstbehalt in Datumsreihenfolge</span></div>
-        ${r.lines.length ? `<ul class="card inv-list">${r.lines.map(line).join("")}
-          <li class="bk-sum"><span>Summe Rechnungen</span><span class="num">${fmtEur(r.regularTotal)}</span><span>Selbstbehalt</span><span class="num">−${fmtEur(r.sbUsed)}</span><span class="strong">Erstattung</span><span class="num strong good-t">${fmtEur(r.payout)}</span></li></ul>`
-          : `<div class="card empty small">Keine regulären Rechnungen ${year}.</div>`}
+        <div class="split" style="margin:0 4px"><h2 class="h3">Rechnungen</h2><span class="xs muted">Erstattung je Rechnung</span></div>
+        ${r.lines.length ? `<div class="card list">${r.lines.map(invRow).join("")}<div class="sum-row"><span>Summe ${fmtEur(r.regularTotal)}</span><span class="good-t">${fmtEur(r.payout)} zurück</span></div></div>`
+          : `<div class="card empty small">Keine Rechnungen ${year}.</div>`}
       </section>
-      ${r.neutralLines.length ? `<section class="stack-s"><div class="split"><h2 class="h3">Vorsorge und Impfungen</h2><span class="xs muted">BRE-neutral, ohne Selbstbehalt</span></div>
-        <ul class="card inv-list">${r.neutralLines.map(line).join("")}</ul>
-        <p class="xs muted">Nur BRE-neutral, wenn die Voraussetzungen des Vorsorgeverzeichnisses deines Tarifs erfüllt sind. Kannst du jederzeit einreichen.</p></section>` : ""}
-      ${r.submitWins && r.unsubmitted.length ? `<a class="btn primary big" href="#/paket/${p.id}/${year}">${ic("share", 20)} Einreichungspaket erstellen</a>` : ""}
+      ${r.neutralLines.length ? `<section class="stack-s"><div class="split" style="margin:0 4px"><h2 class="h3">Vorsorge und Prophylaxe</h2><span class="xs muted">ohne Selbstbehalt, BRE-neutral</span></div>
+        <div class="card list">${r.neutralLines.map(invRow).join("")}</div>
+        <p class="xs muted" style="margin:0 4px">BRE-neutral nur, wenn die Voraussetzungen des Vorsorgeverzeichnisses deines Tarifs erfüllt sind. Kannst du jederzeit einreichen.</p></section>` : ""}
       ${p.note ? `<p class="foot">${esc(p.note)}</p>` : ""}
+      <p class="foot">Schätzung auf Basis deiner Tarifangaben. <a href="#/person/${p.id}">Tarif bearbeiten</a></p>
     </main>`, "home");
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  const first = (S.persons.find(p => p.kind === "adult") || S.persons[0])?.name?.split(" ")[0];
+  return `${h < 11 ? "Guten Morgen" : h < 18 ? "Guten Tag" : "Guten Abend"}${first ? ", " + esc(first) : ""}`;
 }
 
 function viewHome() {
   const y = ui.year;
+  const yearInv = S.invoices.filter(i => yearOf(i) === y);
   const unpaid = S.invoices.filter(i => !i.bezahlt);
   const late = unpaid.filter(i => i.faellig && i.faellig < today());
-  const pending = S.invoices.filter(i => i.eingereicht && (i.erstattet === null || i.erstattet === undefined || i.erstattet === ""));
+  const pending = S.invoices.filter(refundOpen);
   const results = S.persons.map(p => ({ p, r: calc(p, S.invoices, y, S.settings.taxRate) }));
-  const back = results.reduce((a, x) => a + x.r.best + x.r.neutralRefund, 0);
-  const months = Array.from({ length: 12 }, (_, m) => S.invoices.filter(i => yearOf(i) === y && Number(i.datum.slice(5, 7)) === m + 1).reduce((a, i) => a + Number(i.betrag || 0), 0));
+  const back = results.reduce((a, x) => a + choiceOf(x.p, x.r).amount, 0);
+  const payoutSum = results.reduce((a, x) => a + x.r.payout + x.r.neutralRefund, 0);
+  const sbSum = results.reduce((a, x) => a + x.r.sbUsed, 0);
+  const months = Array.from({ length: 12 }, (_, m) => yearInv.filter(i => Number(i.datum.slice(5, 7)) === m + 1).reduce((a, i) => a + Number(i.betrag || 0), 0));
   const mMax = Math.max(...months, 1);
   const yearSum = months.reduce((a, b) => a + b, 0);
-  const yearInv = S.invoices.filter(i => yearOf(i) === y);
   const curM = new Date().getFullYear() === y ? new Date().getMonth() : (y < new Date().getFullYear() ? 11 : -1);
   const dl = deadlines(S.persons, S.invoices).filter(d => !d.overdue).slice(0, 3);
   const standalone = matchMedia("(display-mode: standalone)").matches;
+  const groups = {};
+  for (const { p, r } of results) { const c = choiceOf(p, r); if (c.choice !== "none") (groups[c.choice] ||= []).push(p.name); }
+  const how = [groups.keep?.length ? `Rückerstattung: ${groups.keep.join(", ")}` : "", groups.submit?.length ? `Einreichen: ${groups.submit.join(", ")}` : ""].filter(Boolean).join(" · ");
+  const unpaidSum = unpaid.reduce((a, i) => a + Number(i.betrag || 0), 0);
 
-  page(`<header class="top home-top">
-      <div class="top-t"><span class="eyebrow">Familie · PKV</span><h1>Rechnungsmappe</h1></div>
-      <label class="year-sel"><span class="sr">Jahr</span><select id="year">${yearOptions()}</select></label>
-    </header>
-    <div class="privacy">${ic("lock", 16)} Nur auf diesem Gerät · verschlüsselt</div>
+  page(`<header class="top"><div class="top-t"><span class="sub">${greeting()}</span><h1>Übersicht</h1></div>${yearSeg()}</header>
     <main class="main">
-      ${installEvt && !standalone ? `<section class="card install"><div><strong>Als App installieren</strong><span class="small muted">Eigenes Symbol, Vollbild, offline nutzbar.</span></div><button class="btn primary" type="button" id="install">Installieren</button></section>` : ""}
-      ${late.length ? `<section class="alert">${ic("alert", 24)}<div class="stack-s"><strong>${late.length === 1 ? "1 Rechnung" : late.length + " Rechnungen"} über dem Zahlungsziel</strong>
-        <span class="small">${late.slice(0, 3).map(i => `${esc(short(i.arzt))} ${fmtEur(i.betrag)} (fällig ${fmtShort(i.faellig)})`).join(" · ")}</span>
-        <div class="row-btns"><a class="btn danger-solid" href="#/rechnungen" data-filter="unpaid">Ansehen</a><button class="btn danger-line" type="button" id="paid-all">Als bezahlt markieren</button></div></div></section>` : ""}
-      <section class="card family">
-        <div class="split"><span class="eyebrow">Rechnungen ${y} · Familie</span><span class="xs muted">${yearInv.length} Stück</span></div>
-        <div class="fam-row"><span class="num fam-n">${fmtEur(yearSum)}</span><span class="small muted">Rechnungssumme</span></div>
-        <div class="fam-grid">
-          <div><span class="num strong">${fmtEur(results.reduce((a, x) => a + x.r.payout + x.r.neutralRefund, 0))}</span><span class="xs muted">Erstattung bei Einreichung</span></div>
-          <div><span class="num strong">${fmtEur(results.reduce((a, x) => a + x.r.sbUsed, 0))}</span><span class="xs muted">Selbstbehalt</span></div>
-          <div><span class="num strong">${fmtEur(results.reduce((a, x) => a + x.r.notCovered, 0))}</span><span class="xs muted">nicht erstattet</span></div>
+      ${installEvt && !standalone ? `<section class="card install"><div><strong>Als App installieren</strong><span class="small muted">Eigenes Symbol, Vollbild, offline nutzbar.</span></div><button class="btn primary sm" type="button" id="install">Installieren</button></section>` : ""}
+      <section class="card hero">
+        <span class="sub">Rückfluss ${y} bei bester Wahl</span>
+        <span class="hero-n">${fmtEur0(back)}</span>
+        <span class="xs muted">nach Steuer${how ? " · " + esc(how) : ""}</span>
+        <div class="hero-grid">
+          <div><span class="sub">Rechnungen</span><b>${fmtEur(yearSum)}</b><span class="xs muted">${yearInv.length} Stück</span></div>
+          <div><span class="sub">Noch zu zahlen</span><b class="${late.length ? "bad-t" : ""}">${fmtEur(unpaidSum)}</b><span class="xs muted">${unpaid.length} offen</span></div>
+          <div><span class="sub">Bei Einreichung</span><b>${fmtEur(payoutSum)}</b><span class="xs muted">nach ${fmtEur0(sbSum)} Selbstbehalt</span></div>
+          <div><span class="sub">Erstattung ausstehend</span><b>${pending.length}</b><span class="xs muted">${pending.length === 1 ? "Rechnung" : "Rechnungen"} eingereicht</span></div>
         </div>
       </section>
-      <section class="grid2">
-        <div class="card tile"><span class="eyebrow">Offen zu zahlen</span><span class="num tile-n ${late.length ? "bad-t" : ""}">${fmtEur(unpaid.reduce((a, i) => a + Number(i.betrag || 0), 0))}</span><span class="small muted">${unpaid.length} Rechnung${unpaid.length === 1 ? "" : "en"}${pending.length ? ` · ${pending.length} Erstattung offen` : ""}</span></div>
-        <div class="card tile"><span class="eyebrow">Rückfluss ${y}</span><span class="num tile-n good-t">${fmtEur(back)}</span><span class="small muted">nach Steuer, beste Wahl</span></div>
-      </section>
-      <section class="stack">
-        <h2 class="h2">Einreichen oder Rückerstattung?</h2>
-        ${results.length ? results.map(x => personCard(x.p, x.r)).join("") : `<div class="card empty">Noch keine Personen. <a href="#/einstellungen">In den Einstellungen anlegen</a>.</div>`}
+      ${late.length ? `<div class="stack-s"><a class="notice bad" href="#/rechnungen" data-filter="unpaid"><span class="dot"></span><span>${late.length === 1 ? "1 Rechnung" : late.length + " Rechnungen"} über dem Zahlungsziel</span>${ic("chev", 18)}</a>
+        <button class="btn sm self-start" type="button" id="paid-all" style="margin-left:4px">Alle als bezahlt markieren</button></div>` : ""}
+      <section class="stack-s">
+        <h2 class="sec-t">Familie</h2>
+        ${results.length ? `<div class="card list">${results.map(x => personRow(x.p, x.r)).join("")}</div>` : `<div class="card empty">Noch keine Personen. <a href="#/einstellungen">In den Einstellungen anlegen</a>.</div>`}
       </section>
       <section class="card stack">
-        <div class="split"><h2 class="h3">Arztkosten ${y}</h2><span class="num strong">${fmtEur(yearSum)}</span></div>
-        <div class="bars" role="img" aria-label="Arztkosten pro Monat ${y}">${months.map((v, m) => `<div class="bar ${v ? "has" : ""} ${m > curM ? "future" : ""}" style="height:${v ? Math.max(6, v / mMax * 120) : 3}px">${v === Math.max(...months) && v ? `<span>${Math.round(v).toLocaleString("de-DE")} €</span>` : ""}</div>`).join("")}</div>
-        <div class="bars-x">${"JFMAMJJASOND".split("").map(c => `<span>${c}</span>`).join("")}</div>
+        <div class="split"><h2 class="h3">Arztkosten</h2><span class="small muted">${fmtEur(yearSum)} gesamt</span></div>
+        <div class="bars" role="img" aria-label="Arztkosten pro Monat ${y}">${months.map((v, m) => `<div class="bar ${v ? "has" : ""} ${m > curM ? "future" : ""}" style="height:${v ? Math.max(6, v / mMax * 92) : 4}px">${v === Math.max(...months) && v ? `<span>${fmtEur0(v)}</span>` : ""}</div>`).join("")}</div>
+        <div class="bars-x">${"JFMAMJJASOND".split("").map((c, m) => `<span class="${months[m] ? "on" : ""}">${c}</span>`).join("")}</div>
       </section>
-      <section class="stack">
-        <div class="split"><h2 class="h2">Nächste Fristen</h2><a href="#/fristen" class="small">Alle</a></div>
-        ${dl.length ? `<ol class="card list-plain">${dl.map(d => `<li class="dl"><span class="dl-d num">${fmtShort(d.date)}<br>${d.date.slice(0, 4)}</span><span class="small">${esc(d.text)}</span></li>`).join("")}</ol>` : `<div class="card empty small">Keine anstehenden Fristen.</div>`}
+      <section class="stack-s">
+        <div class="split" style="margin:0 4px"><h2 class="h3" style="font-size:17px">Als Nächstes</h2><a href="#/fristen" class="small">Alle</a></div>
+        ${dl.length ? `<div class="card list">${dl.map(d => `<div class="dl"><span class="datebox"><span>${MONTHS[Number(d.date.slice(5, 7)) - 1]}${d.date.slice(0, 4) !== String(new Date().getFullYear()) ? " " + d.date.slice(2, 4) : ""}</span><b>${Number(d.date.slice(8, 10))}</b></span><span class="small">${esc(d.text)}</span></div>`).join("")}</div>` : `<div class="card empty small">Keine anstehenden Fristen.</div>`}
       </section>
-      <p class="foot">Alle Beträge sind Schätzungen auf Basis deiner Tarifangaben. Maßgeblich sind Tarifbedingungen und Steuerbescheid.</p>
+      <p class="foot">Alle Beträge sind Schätzungen auf Basis deiner Tarifangaben.</p>
+      <div class="privacy-foot">${ic("lock", 14)} Nur auf diesem Gerät · verschlüsselt</div>
     </main>`, "home");
 
-  $("#year").onchange = e => { ui.year = Number(e.target.value); viewHome(); };
+  bindYear(viewHome);
   $("#install")?.addEventListener("click", async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewHome(); });
   $("[data-filter=unpaid]")?.addEventListener("click", () => { ui.fStatus = "unpaid"; ui.fPerson = "all"; });
   $("#paid-all")?.addEventListener("click", async () => {
@@ -419,36 +476,37 @@ function stamps(i) {
 function viewList() {
   const y = ui.year;
   const base = S.invoices.filter(i => yearOf(i) === y && (ui.fPerson === "all" || i.personId === ui.fPerson));
-  const cnt = { unpaid: base.filter(i => !i.bezahlt).length, notsub: base.filter(i => !i.eingereicht).length, refund: base.filter(i => i.eingereicht && (i.erstattet === null || i.erstattet === undefined || i.erstattet === "")).length };
+  const cnt = { unpaid: base.filter(i => !i.bezahlt).length, notsub: base.filter(i => !i.eingereicht && !isNeutral(i.kategorie)).length, refund: base.filter(refundOpen).length };
   let list = base;
   if (ui.fStatus === "unpaid") list = list.filter(i => !i.bezahlt);
   if (ui.fStatus === "notsub") list = list.filter(i => !i.eingereicht);
-  if (ui.fStatus === "refund") list = list.filter(i => i.eingereicht && (i.erstattet === null || i.erstattet === undefined || i.erstattet === ""));
+  if (ui.fStatus === "refund") list = list.filter(refundOpen);
   const q = ui.q.trim().toLowerCase();
   if (q) list = list.filter(i => `${i.arzt} ${i.notiz} ${catLabel(i.kategorie)}`.toLowerCase().includes(q));
   list = [...list].sort((a, b) => (b.datum || "").localeCompare(a.datum || ""));
-  const sum = list.reduce((a, i) => a + Number(i.betrag || 0), 0);
   const exp = expectedFor();
-  const chip = (attr, val, label, cur) => `<button type="button" class="chip" data-${attr}="${val}" aria-pressed="${cur === val}">${label}</button>`;
+  const byMonth = [];
+  for (const i of list) { const k = (i.datum || "").slice(0, 7); let g = byMonth.find(x => x.k === k); if (!g) byMonth.push(g = { k, items: [] }); g.items.push(i); }
+  const seg = (val, label, n) => `<button type="button" data-fs="${val}" aria-pressed="${ui.fStatus === val}">${label}${n ? `<span class="cnt">${n}</span>` : ""}</button>`;
+  const chip = (val, label) => `<button type="button" class="chip" data-fp="${val}" aria-pressed="${ui.fPerson === val}">${label}</button>`;
+  const row = i => { const st = statusOf(i), e = exp[i.id], pn = person(i.personId)?.name || "?";
+    return `<a href="#/rechnung/${i.id}" class="row">
+      <span class="cat">${ic(CAT_IC[i.kategorie] || "doc", 20)}</span>
+      <span class="row-t"><b>${esc(i.arzt || "Ohne Praxisangabe")}</b><span class="xs muted">${dShort(i.datum)} · ${esc(pn)}${i.notiz ? " · " + esc(i.notiz) : ""}</span>${e ? `<span class="xs good-t">${fmtEur(e.refund)} zurück</span>` : ""}</span>
+      <span class="row-v"><b>${fmtEur(i.betrag)}</b><span class="st ${st.cls}">${esc(st.label)}</span></span></a>`; };
 
-  page(`${header("Rechnungen", { right: `<label class="year-sel"><span class="sr">Jahr</span><select id="year">${yearOptions()}</select></label>` })}
+  page(`${header("Rechnungen", { right: yearSeg() })}
     <main class="main">
-      <label class="search">${ic("search", 20)}<span class="sr">Suchen</span><input id="q" type="search" placeholder="Praxis oder Notiz suchen" value="${esc(ui.q)}"></label>
-      <div class="chips">${chip("fp", "all", "Alle", ui.fPerson)}${S.persons.map(p => chip("fp", p.id, esc(p.name), ui.fPerson)).join("")}</div>
-      <div class="chips">${chip("fs", "all", "Alle", ui.fStatus)}${chip("fs", "unpaid", `Offen <b class="num">${cnt.unpaid}</b>`, ui.fStatus)}${chip("fs", "notsub", `Nicht eingereicht <b class="num">${cnt.notsub}</b>`, ui.fStatus)}${chip("fs", "refund", `Erstattung offen <b class="num">${cnt.refund}</b>`, ui.fStatus)}</div>
-      <div class="split list-sum"><span class="eyebrow">${y} · ${list.length} Rechnung${list.length === 1 ? "" : "en"}</span><span class="num strong">${fmtEur(sum)}</span></div>
-      ${list.length ? `<ul class="card inv-list">${list.map(i => `<li><a href="#/rechnung/${i.id}" class="inv">
-        <span class="thumb" data-thumb="${i.pages?.[0]?.id || ""}">${ic("file", 22)}</span>
-        <span class="inv-b"><span class="split top-a"><strong>${esc(i.arzt || "Ohne Praxisangabe")}</strong><span class="num strong nowrap">${fmtEur(i.betrag)}</span></span>
-        <span class="small muted">${fmtDate(i.datum)} · ${esc(person(i.personId)?.name || "?")} · ${esc(i.notiz || catLabel(i.kategorie))}</span>
-        ${exp[i.id] ? `<span class="xs exp">voraussichtlich erstattet bei Einreichung: <b class="num">${fmtEur(exp[i.id].refund)}</b>${exp[i.id].sbPart > 0.004 ? ` (Selbstbehalt −${fmtEur(exp[i.id].sbPart)})` : ""}</span>` : ""}
-        <span class="tags">${stamps(i)}</span></span></a></li>`).join("")}</ul>`
+      <label class="search">${ic("search", 18)}<span class="sr">Suchen</span><input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}"></label>
+      <div class="seg full" role="group" aria-label="Status">${seg("all", "Alle")}${seg("unpaid", "Zu zahlen", cnt.unpaid)}${seg("notsub", "Einreichen", cnt.notsub)}${seg("refund", "Erstattung", cnt.refund)}</div>
+      ${S.persons.length > 1 ? `<div class="chips">${chip("all", "Alle")}${S.persons.map(p => chip(p.id, esc(p.name))).join("")}</div>` : ""}
+      ${byMonth.length ? byMonth.map(g => `<div class="stack-s"><div class="month-h"><span>${g.k ? `${MONTHS_L[Number(g.k.slice(5, 7)) - 1]} ${g.k.slice(0, 4)}` : "Ohne Datum"}</span><span>${fmtEur(g.items.reduce((a, i) => a + Number(i.betrag || 0), 0))}</span></div>
+        <div class="card list">${g.items.map(row).join("")}</div></div>`).join("")
         : `<div class="card empty"><p>${S.invoices.length ? "Keine Rechnungen für diese Auswahl." : "Noch keine Rechnungen."}</p><a class="btn primary" href="#/neu">${ic("cam", 20)} Erste Rechnung erfassen</a></div>`}
     </main>`, "list");
 
-  $("#year").onchange = e => { ui.year = Number(e.target.value); viewList(); };
+  bindYear(viewList);
   $("#q").oninput = e => { ui.q = e.target.value; clearTimeout(viewList._t); viewList._t = setTimeout(() => { const pos = e.target.selectionStart; viewList(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); }, 250); };
-  loadThumbs();
 }
 root.addEventListener("click", e => {
   const fp = e.target.closest("[data-fp]"); if (fp) { ui.fPerson = fp.dataset.fp; viewList(); return; }
@@ -490,53 +548,67 @@ function viewEdit() {
   const hasPages = draft.pages.length > 0;
   const st = draft.status;
   const prov = PROVIDERS[S.settings.ai.provider] || PROVIDERS.claude;
-  page(`${header(draft.isNew ? "Rechnung erfassen" : "Rechnung", { back: draft.isNew ? "#/" : "#/rechnungen" })}
+  const st0 = statusOf(i);
+  const fr = (id, label, k, control) => `<label class="fr" for="${id}"><span>${label}${k ? fieldState(k) : ""}</span>${control}</label>`;
+  page(`<header class="top with-back">
+      <a class="icon-btn" href="${draft.isNew ? "#/" : "#/rechnungen"}" aria-label="Zurück">${ic("back", 22)}</a>
+      <span class="top-c">${draft.isNew ? "Rechnung erfassen" : "Rechnung"}</span>
+      ${!draft.isNew ? `<button type="button" class="icon-btn" id="f-share" aria-label="Beleg teilen" ${hasPages || draft.original ? "" : "disabled"}>${ic("up", 20)}</button>` : `<span style="width:44px"></span>`}
+    </header>
     <main class="main">
-      <section class="stack">
+      ${!draft.isNew ? `<section class="inv-hero">
+          <span class="small muted">${esc(i.arzt || "Ohne Praxisangabe")}</span>
+          <span class="amt">${fmtEur(i.betrag)}</span>
+          <span class="pill-st ${st0.cls}">${st0.cls === "bad" ? `Zahlungsziel ${dShort(i.faellig)} überschritten` : esc(st0.label[0].toUpperCase() + st0.label.slice(1))}</span>
+        </section>
+        <div class="grid2">
+          <button type="button" class="btn ${i.bezahlt ? "on" : "primary"}" id="q-paid">${i.bezahlt ? `${ic("check", 18)} Bezahlt` : "Als bezahlt"}</button>
+          <button type="button" class="btn ${i.eingereicht ? "on" : ""}" id="q-sub">${i.eingereicht ? `${ic("check", 18)} Eingereicht` : "Eingereicht"}</button>
+        </div>` : ""}
+
+      <section class="${hasPages ? "card stack" : "stack"}">
         ${hasPages ? `<div class="pages">${draft.pages.map((p, n) => `<figure class="pg"><img src="${p.url}" alt="Seite ${n + 1}"><figcaption><button type="button" class="icon-btn sm" data-rot="${n}" aria-label="Seite ${n + 1} drehen">${ic("rot", 18)}</button><span class="xs">Seite ${n + 1}</span><button type="button" class="icon-btn sm" data-delpg="${n}" aria-label="Seite ${n + 1} entfernen">${ic("trash", 18)}</button></figcaption></figure>`).join("")}</div>`
-          : `<div class="capture-empty">${ic("file", 40)}<p>Fotografiere die Rechnung möglichst gerade, bei gutem Licht und mit allen vier Ecken im Bild.</p></div>`}
+          : `<div class="capture-empty">${ic("cam", 36)}<p>Fotografiere die Rechnung gerade, bei gutem Licht und mit allen vier Ecken im Bild – oder wähle ein PDF.</p></div>`}
         <div class="grid2">
           <label class="btn ${hasPages ? "" : "primary"} file-btn">${ic("cam", 20)} ${hasPages ? "Weitere Seite" : "Fotografieren"}<input type="file" accept="image/*" capture="environment" class="file-in" id="f-cam"></label>
           <label class="btn file-btn">${ic("file", 20)} ${hasPages ? "Datei" : "Foto / PDF"}<input type="file" accept="image/*,application/pdf" multiple class="file-in" id="f-file"></label>
         </div>
+        ${hasPages ? `<div class="read-st">${st?.busy ? `<span class="spin" aria-hidden="true"></span>` : st?.error ? `<span class="st-i bad">${ic("alert", 18)}</span>` : st?.done ? `<span class="st-i ok">${ic("check", 18)}</span>` : `<span class="st-i">${ic("file", 18)}</span>`}
+            <div><strong>${esc(st?.title || "Beleg gespeichert")}</strong><span class="xs muted">${esc(st?.text || "Angaben automatisch auslesen lassen:")}</span></div></div>
+          ${st?.progress != null ? `<div class="prog"><div style="width:${Math.round(st.progress * 100)}%"></div></div>` : ""}
+          <div class="grid2">
+            <button type="button" class="btn sm" id="ocr" ${st?.busy ? "disabled" : ""}>${ic("file", 18)} Ohne KI lesen</button>
+            <button type="button" class="btn sm soft" id="ai" ${st?.busy ? "disabled" : ""}>${ic("spark", 18)} Mit KI lesen</button>
+          </div>
+          <p class="xs muted">KI: ${esc(prov.label)}. Nur die Seitenbilder dieser Rechnung werden gesendet.</p>` : ""}
       </section>
 
-      ${hasPages ? `<section class="card stack read-card">
-        <div class="read-st">${st?.busy ? `<span class="spin" aria-hidden="true"></span>` : st?.error ? `<span class="st-i bad">${ic("alert", 18)}</span>` : st?.done ? `<span class="st-i ok">${ic("check", 18)}</span>` : `<span class="st-i">${ic("file", 18)}</span>`}
-          <div><strong>${esc(st?.title || "Noch nicht ausgelesen")}</strong><span class="small muted">${esc(st?.text || "")}</span></div></div>
-        ${st?.progress != null ? `<div class="prog"><div style="width:${Math.round(st.progress * 100)}%"></div></div>` : ""}
-        <div class="grid2">
-          <button type="button" class="btn" id="ocr" ${st?.busy ? "disabled" : ""}>${ic("file", 20)} Ohne KI lesen</button>
-          <button type="button" class="btn primary" id="ai" ${st?.busy ? "disabled" : ""}>${ic("spark", 20)} Mit KI lesen</button>
-        </div>
-        <p class="xs muted">KI: ${esc(prov.label)}. Nur die Seitenbilder dieser Rechnung werden gesendet.</p>
-      </section>` : ""}
-
-      ${refundBox()}
       <form id="inv-form" class="stack" novalidate>
-        <h2 class="h3">Angaben ${draft.isNew ? "prüfen" : ""}</h2>
-        <label class="field"><span>Für ${fieldState("personId")}</span><select id="f-person" class="${flagCls("personId")}">${S.persons.map(p => `<option value="${p.id}" ${p.id === i.personId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
-        <label class="field"><span>Praxis / Leistungserbringer ${fieldState("arzt")}</span><input id="f-arzt" class="${flagCls("arzt")}" value="${esc(i.arzt)}" autocomplete="off" placeholder="z. B. Kinderarztpraxis Dr. Meier"></label>
-        <div class="grid2">
-          <label class="field"><span>Rechnungsdatum ${fieldState("datum")}</span><input id="f-datum" type="date" class="${flagCls("datum")}" value="${esc(i.datum)}" required></label>
-          <label class="field"><span>Betrag (€) ${fieldState("betrag")}</span><input id="f-betrag" type="number" inputmode="decimal" step="0.01" min="0" class="num ${flagCls("betrag")}" value="${i.betrag === "" || i.betrag == null ? "" : Number(i.betrag).toFixed(2)}" required></label>
-          <label class="field"><span>Zahlbar bis ${fieldState("faellig")}</span><input id="f-faellig" type="date" class="${flagCls("faellig")}" value="${esc(i.faellig || "")}"></label>
-          <label class="field"><span>Kategorie ${fieldState("kategorie")}</span><select id="f-kat" class="${flagCls("kategorie")}">${CATS.map(c => `<option value="${c.k}" ${c.k === i.kategorie ? "selected" : ""}>${esc(c.l)}</option>`).join("")}</select></label>
+        <div class="card flist">
+          ${fr("f-person", "Für", "personId", `<select id="f-person" class="${flagCls("personId")}">${S.persons.map(p => `<option value="${p.id}" ${p.id === i.personId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>`)}
+          ${fr("f-arzt", "Praxis", "arzt", `<input id="f-arzt" class="${flagCls("arzt")}" value="${esc(i.arzt)}" autocomplete="off" placeholder="z. B. Dr. Meier">`)}
+          ${fr("f-betrag", "Betrag (€)", "betrag", `<input id="f-betrag" type="number" inputmode="decimal" step="0.01" min="0" class="${flagCls("betrag")}" value="${i.betrag === "" || i.betrag == null ? "" : Number(i.betrag).toFixed(2)}" placeholder="0,00" required>`)}
+          ${fr("f-datum", "Rechnungsdatum", "datum", `<input id="f-datum" type="date" class="${flagCls("datum")}" value="${esc(i.datum)}" required>`)}
+          ${fr("f-faellig", "Zahlbar bis", "faellig", `<input id="f-faellig" type="date" class="${flagCls("faellig")}" value="${esc(i.faellig || "")}">`)}
+          ${fr("f-kat", "Kategorie", "kategorie", `<select id="f-kat" class="${flagCls("kategorie")}">${CATS.map(c => `<option value="${c.k}" ${c.k === i.kategorie ? "selected" : ""}>${esc(c.l)}</option>`).join("")}</select>`)}
+          ${fr("f-notiz", "Notiz", "notiz", `<input id="f-notiz" class="${flagCls("notiz")}" value="${esc(i.notiz || "")}" placeholder="z. B. MRT Knie">`)}
         </div>
-        <label class="field"><span>Notiz ${fieldState("notiz")}</span><input id="f-notiz" class="${flagCls("notiz")}" value="${esc(i.notiz || "")}" placeholder="z. B. MRT Knie"></label>
         ${positionsEditor()}
+        ${refundBox()}
         <div class="card toggles">
           <label class="tg"><span>Bezahlt</span><input type="checkbox" class="sw" id="f-bezahlt" ${i.bezahlt ? "checked" : ""}></label>
           ${isDental(i.kategorie) ? `<label class="tg"><span class="tg-t"><span>Unfallfolge</span><span class="xs muted">zählt nicht zum Zahn-Höchstbetrag</span></span><input type="checkbox" class="sw" id="f-unfall" ${i.unfall ? "checked" : ""}></label>` : ""}
-          <label class="tg"><span>Bei der Versicherung eingereicht</span><input type="checkbox" class="sw" id="f-eing" ${i.eingereicht ? "checked" : ""}></label>
-          <label class="tg"><span>Erstattet (€)</span><input id="f-erst" type="number" inputmode="decimal" step="0.01" min="0" class="num mini" value="${i.erstattet ?? ""}" placeholder="–"></label>
+          <label class="tg"><span>Eingereicht</span><input type="checkbox" class="sw" id="f-eing" ${i.eingereicht ? "checked" : ""}></label>
+          <label class="tg"><span>Erstattet (€)</span><input id="f-erst" type="number" inputmode="decimal" step="0.01" min="0" class="mini" value="${i.erstattet ?? ""}" placeholder="–"></label>
         </div>
         <p class="form-err" id="f-err" role="alert"></p>
-        <button type="submit" class="btn ink big" id="f-save">Rechnung speichern</button>
-        ${!draft.isNew ? `<div class="grid2"><button type="button" class="btn" id="f-share" ${hasPages || draft.original ? "" : "disabled"}>${ic("share", 20)} Beleg teilen</button><button type="button" class="btn danger-line" id="f-del">${ic("trash", 20)} Löschen</button></div>` : ""}
+        <button type="submit" class="btn primary big" id="f-save">${draft.isNew ? "Rechnung speichern" : "Änderungen speichern"}</button>
+        ${!draft.isNew ? `<button type="button" class="btn text-danger" id="f-del">Rechnung löschen</button>` : ""}
       </form>
     </main>`);
 
+  $("#q-paid")?.addEventListener("click", () => quickToggle("bezahlt"));
+  $("#q-sub")?.addEventListener("click", () => quickToggle("eingereicht"));
   $("#f-cam").onchange = e => addFiles(e.target.files);
   $("#f-file").onchange = e => addFiles(e.target.files);
   $("#ocr")?.addEventListener("click", () => runOcr());
@@ -557,7 +629,7 @@ function viewEdit() {
   $("#f-share")?.addEventListener("click", shareBeleg);
   // Eingaben sofort in den Entwurf übernehmen, damit ein Neuzeichnen nichts verliert
   const FIELD = { "f-person": "personId", "f-arzt": "arzt", "f-datum": "datum", "f-betrag": "betrag", "f-faellig": "faellig", "f-kat": "kategorie", "f-notiz": "notiz" };
-  $("#inv-form").addEventListener("input", e => { const k = FIELD[e.target.id]; if (k) { draft.src[k] = "user"; e.target.classList.remove("f-ki", "f-chk"); e.target.closest(".field")?.querySelector(".fs")?.remove(); } collectForm(); const box = $("#refund-box"); const html = refundBox(); if (box) { if (html) box.outerHTML = html; else box.remove(); } else if (html) $("#inv-form").insertAdjacentHTML("beforebegin", html); });
+  $("#inv-form").addEventListener("input", e => { const k = FIELD[e.target.id]; if (k) { draft.src[k] = "user"; e.target.classList.remove("f-ki", "f-chk"); e.target.closest(".fr, .field")?.querySelector(".fs")?.remove(); } collectForm(); const box = $("#refund-box"); const html = refundBox(); if (box) { if (html) box.outerHTML = html; else box.remove(); } else if (html) $(".toggles").insertAdjacentHTML("beforebegin", html); });
   $("#inv-form").addEventListener("change", collectForm);
 }
 
@@ -601,7 +673,7 @@ function refundBox() {
   const real = i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "";
   const row = (a, b, cls = "") => `<div class="wf-r ${cls}"><span>${a}</span><span class="num">${b}</span></div>`;
   return `<section class="card stack-s" id="refund-box">
-    <div class="split"><h2 class="h3">Erstattung</h2><a class="xs" href="#/jahr/${i.personId}/${yearOf(i)}">Alle Rechnungen ${esc(p?.name || "")} ${yearOf(i)}</a></div>
+    <div class="split"><h2 class="h3">Erstattung bei Einreichung</h2><a class="xs" href="#/jahr/${i.personId}/${yearOf(i)}">${esc(p?.name || "")} ${yearOf(i)}</a></div>
     <div class="wf">
       ${row("Rechnungsbetrag", fmtEur(l.amount))}
       ${l.capCut > 0.004 ? row("− über Beihilfe-Höchstbetrag", fmtEur(l.capCut), "minus") : ""}
@@ -615,6 +687,18 @@ function refundBox() {
     ${(() => { if (!isDental(i.kategorie) || !p) return ""; const d = dentalLedger(p, [...others, i], yearOf(i)); return d.active ? `<p class="xs ${l.dentalCut > 0.004 ? "bad-t" : "muted"}">${i.unfall ? "Unfallfolge: zählt nicht zum Zahn-Budget." : `Zahn-Budget ${p.name}: noch ${fmtEur(d.remaining)} von ${fmtEur(d.limit)} frei (inkl. dieser Rechnung).`}</p>` : ""; })()}
     ${!l.neutral && !l.sbFree ? `<p class="xs muted">Der Selbstbehalt wird auf die Rechnungen des Jahres in Datumsreihenfolge verrechnet.</p>` : ""}
   </section>`;
+}
+
+async function quickToggle(k) {
+  collectForm();
+  const i = draft.inv;
+  i[k] = !i[k];
+  if (k === "bezahlt") i.bezahltAm = i.bezahlt ? today() : "";
+  if (k === "eingereicht") i.eingereichtAm = i.eingereicht ? today() : "";
+  const idx = S.invoices.findIndex(x => x.id === i.id);
+  if (idx >= 0) { S.invoices[idx] = { ...S.invoices[idx], [k]: i[k], bezahltAm: i.bezahltAm, eingereichtAm: i.eingereichtAm }; await save(); }
+  toast(k === "bezahlt" ? (i.bezahlt ? "Als bezahlt markiert" : "Nicht mehr bezahlt") : (i.eingereicht ? "Als eingereicht markiert" : "Nicht mehr eingereicht"));
+  viewEdit();
 }
 
 function collectForm() {
@@ -919,7 +1003,7 @@ async function viewSettings() {
       <section class="stack-s"><h3 class="sec">Gefahrenzone</h3>
         <div class="card stack"><p class="small">Löscht alle Rechnungen, Fotos und Einstellungen von diesem Gerät. Ein Backup bleibt davon unberührt.</p><button type="button" class="btn danger-line" id="wipe">Alle Daten löschen</button></div>
       </section>
-      <p class="foot">Rechnungsmappe ${APP_VERSION} · Schriften unter SIL Open Font License · PDF-Werkzeuge: pdf.js (Apache 2.0), pdf-lib (MIT) · Texterkennung: Tesseract.js (Apache 2.0)</p>
+      <p class="foot">Rechnungsmappe ${APP_VERSION} · Schrift Instrument Sans (SIL Open Font License) · PDF-Werkzeuge: pdf.js (Apache 2.0), pdf-lib (MIT) · Texterkennung: Tesseract.js (Apache 2.0)</p>
     </main>`, "set");
 
   $("#ai-form").addEventListener("change", e => { if (e.target.name === "prov") { s.ai.provider = e.target.value; save().then(viewSettings); } });

@@ -17,6 +17,6 @@ Eine App für Arztrechnungen von Privatversicherten. Du erfasst die Rechnungen d
 
 ## Technik
 
-Die App besteht nur aus statischem HTML, CSS und JavaScript, ohne Build-Schritt. Sie läuft auf GitHub Pages. Mitgeliefert werden pdf.js (Apache 2.0), pdf-lib (MIT) sowie die Schriften Bricolage Grotesque, Instrument Sans und IBM Plex Mono (alle SIL OFL 1.1).
+Die App besteht nur aus statischem HTML, CSS und JavaScript, ohne Build-Schritt. Sie läuft auf GitHub Pages. Mitgeliefert werden pdf.js (Apache 2.0), pdf-lib (MIT) sowie die Schrift Instrument Sans (SIL OFL 1.1).
 
 Alle Berechnungen sind Schätzungen. Maßgeblich sind die Tarifbedingungen und der Steuerbescheid.
