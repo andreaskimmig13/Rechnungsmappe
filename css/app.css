@@ -139,6 +139,13 @@ button { cursor: pointer; }
 .pf input { width: 100%; min-height: 44px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font: 15px var(--f-mono); }
 .warn-t { color: var(--warn); }
 
+/* Zahn-Budget */
+.budget { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--ground); }
+.bud-bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.bud-bar > div { height: 100%; background: var(--acc); border-radius: 4px; }
+.budget.warn .bud-bar > div { background: var(--warn); }
+.budget.bad .bud-bar > div { background: var(--bad); }
+
 /* Balken */
 .bars { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; align-items: end; height: 150px; border-bottom: 1px solid var(--line); padding-top: 22px; }
 .bar { position: relative; border-radius: 3px; background: var(--hatch); }

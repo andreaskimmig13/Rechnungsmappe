@@ -1,10 +1,10 @@
 import * as store from "./store.js";
-import { CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck } from "./calc.js";
+import { CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck, isDental, isNeutral, dentalCapsOf, dentalLedger } from "./calc.js";
 import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.3.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -241,10 +241,29 @@ function waterfall(r, { compact = false } = {}) {
   return `<div class="wf">
     ${row(`Rechnungen ${ui.year} (${n} Stück)`, fmtEur(r.regularTotal))}
     ${r.capCut > 0.004 ? row("− über Höchstbetrag (Beihilfe-Liste)", fmtEur(r.capCut), "minus") : ""}
-    ${r.notCovered - r.capCut > 0.004 || !compact ? row("− nicht erstattet (Tarif unter 100 %)", fmtEur(r.notCovered - r.capCut), "minus") : ""}
+    ${r.notCovered - r.capCut - r.dentalCut > 0.004 || !compact ? row("− nicht erstattet (Tarif unter 100 %)", fmtEur(r.notCovered - r.capCut - r.dentalCut), "minus") : ""}
+    ${r.dentalCut > 0.004 ? row("− über Zahn-Höchstbetrag (erste Jahre)", fmtEur(r.dentalCut), "minus") : ""}
     ${row(`− Selbstbehalt${r.sb > r.sbUsed + 0.004 ? ` (${fmtEur(r.sb - r.sbUsed)} noch offen)` : ""}`, fmtEur(r.sbUsed), "minus")}
     ${row("= Erstattung bei Einreichung", fmtEur(r.payout), "sum")}
     ${r.neutralLines.length ? row(`+ Vorsorge/Impfung (${r.neutralLines.length}), BRE-neutral`, fmtEur(r.neutralRefund), "extra") : ""}
+  </div>`;
+}
+
+function dentalBudget(p, r, { full = false } = {}) {
+  const d = r.dental;
+  if (!d.caps || !d.startYear) return "";
+  const hasDental = S.invoices.some(i => i.personId === p.id && isDental(i.kategorie));
+  if (!d.active) return full && hasDental && d.endsYear ? `<p class="xs muted">Zahn-Höchstbeträge: seit ${d.endsYear} keine Begrenzung mehr.</p>` : "";
+  if (!full && !hasDental) return "";
+  const used = d.usedBefore + d.usedThis;
+  const pct = Math.min(100, used / d.limit * 100);
+  const tone = d.remaining <= 0.004 ? "bad" : d.remaining < d.limit * 0.25 ? "warn" : "ok";
+  return `<div class="budget ${tone}">
+    <div class="split"><span class="eyebrow">Zahn-Budget ${r.fy.first ? "1. Versicherungsjahr" : `bis Ende ${ui.year}`}</span><span class="num small strong">noch ${fmtEur(d.remaining)}</span></div>
+    <div class="bud-bar"><div style="width:${pct.toFixed(1)}%"></div></div>
+    <div class="split xs muted"><span>genutzt ${fmtEur(used)}${d.usedBefore > 0.004 ? ` (davon Vorjahre ${fmtEur(d.usedBefore)})` : ""}</span><span>Grenze ${fmtEur(d.limit)}</span></div>
+    ${full ? `<p class="xs muted">Versicherungsjahr ${d.idx} von ${d.caps.length} mit Begrenzung. Die Grenzen gelten zusammengerechnet seit Versicherungsbeginn: ${d.caps.map((c, n) => `bis Ende ${d.startYear + n}: ${fmtEur(c)}`).join(" · ")}. Ab ${d.endsYear} unbegrenzt. Unfallfolgen zählen nicht mit.${d.usedBefore > 0 ? "" : " Vorjahre zählen nur mit eingereichten Rechnungen."}</p>` : ""}
+    ${d.cutThis > 0.004 ? `<p class="xs bad-t">${fmtEur(d.cutThis)} ${ui.year} über der Grenze – wird nicht erstattet.</p>` : ""}
   </div>`;
 }
 
@@ -258,6 +277,7 @@ function personCard(p, r) {
     ${head}
     ${gauge(r)}
     <div class="split small muted"><span>${r.neutral.length ? `${r.neutral.length} Vorsorge-Rechnung(en), BRE-neutral` : `Keine Rechnungen ${y}`}</span><span>BRE netto <b class="num good-t">${fmtEur(r.breNet)}</b></span></div>
+    ${dentalBudget(p, r)}
     ${r.inv.length ? open : ""}
   </article>`;
   return `<article class="card pcard">
@@ -265,6 +285,7 @@ function personCard(p, r) {
     ${waterfall(r, { compact: true })}
     <div class="vs ${r.submitWins ? "" : "win"}"><span><span class="eyebrow">BRE nach Steuer</span><span class="xs muted">wenn du nichts einreichst · ${breLine}</span></span><span class="num big-n">${fmtEur(r.breLost ? 0 : r.breNet)}</span></div>
     <div class="stack-s">${gauge(r)}<div class="split xs muted"><span>Erstattungsfähig <b class="num ink">${fmtEur(r.eligible)}</b></span><span>Schwelle <b class="num ink">${fmtEur(r.threshold)}</b></span></div></div>
+    ${dentalBudget(p, r)}
     ${!r.submitWins ? `<p class="small">Noch <b class="num">${fmtEur(r.rest)}</b> an Kosten, bis sich Einreichen lohnt. Bis dahin selbst zahlen.</p>` : ""}
     <div class="row-btns">${open}${r.submitWins && r.unsubmitted.length ? `<a class="btn sm primary" href="#/paket/${p.id}/${y}">${ic("share", 18)} Einreichungspaket (${r.unsubmitted.length})</a>` : ""}</div>
     ${r.fy.first ? `<p class="xs muted">Erstes Versicherungsjahr: BRE anteilig für ${r.fy.months} Monate${r.fy.sbFactor < 1 ? ", Selbstbehalt gekürzt" : ""}.</p>` : ""}
@@ -291,7 +312,7 @@ function viewPersonYear(pid, year) {
   const line = l => `<li><a class="bk" href="#/rechnung/${l.inv.id}">
     <span class="split top-a"><strong>${esc(l.inv.arzt || "Ohne Praxisangabe")}</strong><span class="num strong nowrap">${fmtEur(l.amount)}</span></span>
     <span class="xs muted">${fmtDate(l.inv.datum)} · ${esc(l.inv.notiz || catLabel(l.inv.kategorie))}</span>
-    <span class="bk-calc xs"><span>${l.capCut > 0.004 ? `Höchstbetrag −${fmtEur(l.capCut)} · ` : ""}Satz ${Math.round(l.rate * 100)} %${l.rateCut > 0.004 ? ` · −${fmtEur(l.rateCut)}` : ""}</span><span>${l.neutral ? "ohne Selbstbehalt" : l.sbFree ? "ohne SB (Zahn)" : l.sbPart > 0.004 ? `SB −${fmtEur(l.sbPart)}` : "SB schon erreicht"}</span><span class="num strong ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)}</span></span>
+    <span class="bk-calc xs"><span>${l.capCut > 0.004 ? `Höchstbetrag −${fmtEur(l.capCut)} · ` : ""}Satz ${Math.round(l.rate * 100)} %${l.rateCut > 0.004 ? ` · −${fmtEur(l.rateCut)}` : ""}${l.dentalCut > 0.004 ? ` · Zahn-Budget −${fmtEur(l.dentalCut)}` : ""}${l.inv.unfall ? " · Unfall" : ""}</span><span>${l.neutral ? "ohne Selbstbehalt" : l.sbFree ? "ohne SB (Zahn)" : l.sbPart > 0.004 ? `SB −${fmtEur(l.sbPart)}` : "SB schon erreicht"}</span><span class="num strong ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)}</span></span>
     <span class="tags">${stamps(l.inv)}</span>
   </a></li>`;
   page(`${header(`${p.name} · ${year}`, { back: "#/", sub: `${p.insurer} · ${p.tariff}` })}
@@ -301,6 +322,7 @@ function viewPersonYear(pid, year) {
         ${waterfall(r)}
         <div class="vs ${r.submitWins ? "" : "win"}"><span><span class="eyebrow">BRE nach Steuer</span><span class="xs muted">${r.breLost ? "entfällt, da schon eingereicht" : `${fmtEur(r.bre)} brutto − ${fmtEur(r.breTax)} Steuer`}</span></span><span class="num big-n">${fmtEur(r.breLost ? 0 : r.breNet)}</span></div>
       </section>
+      ${dentalBudget(p, r, { full: true }) ? `<section class="card">${dentalBudget(p, r, { full: true })}</section>` : ""}
       <section class="stack-s">
         <div class="split"><h2 class="h3">Rechnungen ${year}</h2><span class="xs muted">Selbstbehalt in Datumsreihenfolge</span></div>
         ${r.lines.length ? `<ul class="card inv-list">${r.lines.map(line).join("")}
@@ -389,7 +411,8 @@ function stamps(i) {
   if (i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "") t.push(`<span class="tag good">Erstattet ${fmtEur(i.erstattet)}</span>`);
   else if (i.eingereicht) t.push(`<span class="tag acc">Eingereicht${i.eingereichtAm ? " " + fmtShort(i.eingereichtAm) : ""}</span>`);
   else t.push(`<span class="tag">Nicht eingereicht</span>`);
-  if (i.kategorie === "vorsorge") t.push(`<span class="tag">BRE-neutral</span>`);
+  if (isNeutral(i.kategorie)) t.push(`<span class="tag">BRE-neutral</span>`);
+  if (i.unfall) t.push(`<span class="tag">Unfall</span>`);
   return t.join("");
 }
 
@@ -504,6 +527,7 @@ function viewEdit() {
         ${positionsEditor()}
         <div class="card toggles">
           <label class="tg"><span>Bezahlt</span><input type="checkbox" class="sw" id="f-bezahlt" ${i.bezahlt ? "checked" : ""}></label>
+          ${isDental(i.kategorie) ? `<label class="tg"><span class="tg-t"><span>Unfallfolge</span><span class="xs muted">zählt nicht zum Zahn-Höchstbetrag</span></span><input type="checkbox" class="sw" id="f-unfall" ${i.unfall ? "checked" : ""}></label>` : ""}
           <label class="tg"><span>Bei der Versicherung eingereicht</span><input type="checkbox" class="sw" id="f-eing" ${i.eingereicht ? "checked" : ""}></label>
           <label class="tg"><span>Erstattet (€)</span><input id="f-erst" type="number" inputmode="decimal" step="0.01" min="0" class="num mini" value="${i.erstattet ?? ""}" placeholder="–"></label>
         </div>
@@ -582,11 +606,13 @@ function refundBox() {
       ${row("Rechnungsbetrag", fmtEur(l.amount))}
       ${l.capCut > 0.004 ? row("− über Beihilfe-Höchstbetrag", fmtEur(l.capCut), "minus") : ""}
       ${row(`− nicht erstattet (Satz ${Math.round(l.rate * 100)} %)`, fmtEur(l.rateCut), "minus")}
+      ${l.dentalCut > 0.004 ? row("− über Zahn-Höchstbetrag", fmtEur(l.dentalCut), "minus") : ""}
       ${row(l.neutral ? "− Selbstbehalt (entfällt bei Vorsorge)" : l.sbFree ? "− Selbstbehalt (gilt nicht für Zahn)" : "− Anteil am Selbstbehalt", fmtEur(l.sbPart), "minus")}
       ${row("= voraussichtlich erstattet", fmtEur(l.refund), "sum")}
       ${real ? row("tatsächlich erstattet", fmtEur(i.erstattet), Math.abs(Number(i.erstattet) - l.refund) < 0.01 ? "extra" : "diff") : ""}
     </div>
     ${real && Math.abs(Number(i.erstattet) - l.refund) >= 0.01 ? `<p class="xs muted">Abweichung ${fmtEur(Number(i.erstattet) - l.refund)} – prüfe den Leistungsbescheid oder die Erstattungssätze im Tarif.</p>` : ""}
+    ${(() => { if (!isDental(i.kategorie) || !p) return ""; const d = dentalLedger(p, [...others, i], yearOf(i)); return d.active ? `<p class="xs ${l.dentalCut > 0.004 ? "bad-t" : "muted"}">${i.unfall ? "Unfallfolge: zählt nicht zum Zahn-Budget." : `Zahn-Budget ${p.name}: noch ${fmtEur(d.remaining)} von ${fmtEur(d.limit)} frei (inkl. dieser Rechnung).`}</p>` : ""; })()}
     ${!l.neutral && !l.sbFree ? `<p class="xs muted">Der Selbstbehalt wird auf die Rechnungen des Jahres in Datumsreihenfolge verrechnet.</p>` : ""}
   </section>`;
 }
@@ -602,6 +628,7 @@ function collectForm() {
   if (i.bezahlt && !wasPaid) i.bezahltAm = today();
   if (i.eingereicht && !wasSub) i.eingereichtAm = today();
   const er = $("#f-erst").value; i.erstattet = er === "" ? null : Number(er);
+  const uf = $("#f-unfall"); if (uf) i.unfall = uf.checked; else if (!isDental(i.kategorie)) delete i.unfall;
 }
 
 async function addFiles(files) {
@@ -1026,6 +1053,11 @@ function viewPerson(id) {
           </div>
           <p class="xs muted">Den begünstigten Anteil findest du auf der jährlichen Beitragsbescheinigung deiner Versicherung.</p>
         </section>
+        <section class="card stack">
+          <h2 class="h3">Zahn-Höchstbeträge der ersten Jahre</h2>
+          <p class="xs muted">Höchstleistung für Zahnleistungen zusammengerechnet seit Versicherungsbeginn. Jahr 1 läuft bis zum 31.12. des Beginnjahres. Leer lassen = keine Begrenzung.</p>
+          <div class="grid2">${[0, 1, 2, 3].map(n => `<label class="field"><span>bis Ende Jahr ${n + 1}${p.start ? ` (${Number(p.start.slice(0, 4)) + n})` : ""}</span><input name="dc${n}" id="pp-dc${n}" type="number" inputmode="decimal" step="50" min="0" value="${esc((dentalCapsOf(p) || [])[n] ?? "")}"></label>`).join("")}</div>
+        </section>
         <section class="card list-form">
           ${tg("sbDental", "Selbstbehalt gilt auch für Zahnleistungen")}
           ${tg("sbQuarterRule", "Selbstbehalt im ersten Jahr je Quartal gekürzt")}
@@ -1054,6 +1086,7 @@ function viewPerson(id) {
     for (const k of ["beitrag", "sb", "breFix", "breMonate", "basisPct"]) p[k] = Number(fd.get(k)) || 0;
     for (const k of ["sbDental", "sbQuarterRule", "breVariableFirstYear", "offset"]) p[k] = fd.get(k) === "on";
     p.rates = Object.fromEntries(CATS.map(c => [c.k, Math.min(100, Math.max(0, Number(fd.get("r-" + c.k)) || 0))]));
+    p.dentalCaps = [0, 1, 2, 3].map(n => Number(fd.get("dc" + n)) || 0).filter(x => x > 0);
     await save(); toast(`${p.name} gespeichert`); location.hash = "#/einstellungen";
   };
   $("#pp-del").onclick = async () => {

@@ -12,7 +12,8 @@ export const CATS = [
   { k: "hilfsmittel", l: "Hilfsmittel" },
   { k: "sehhilfe", l: "Brille / Kontaktlinsen" },
   { k: "stationaer", l: "Krankenhaus" },
-  { k: "vorsorge", l: "Vorsorge, Impfung, Prophylaxe" },
+  { k: "zahnprophylaxe", l: "Zahnprophylaxe / PZR" },
+  { k: "vorsorge", l: "Vorsorge, Impfung" },
 ];
 // Höchstbeträge nach Anlage 9 BBhV (zu § 23 Abs. 1), gültig ab 01.02.2026.
 // Signal Iduna erstattet Logopädie und Ergotherapie nur bis zu diesen Beträgen.
@@ -61,21 +62,24 @@ export function positionCheck(p, inv) {
 }
 
 export const catLabel = k => (CATS.find(c => c.k === k) || { l: k || "–" }).l;
-export const isDental = k => k === "zahn" || k === "zahnersatz";
+export const DENTAL_CATS = ["zahn", "zahnersatz", "zahnprophylaxe"];
+export const NEUTRAL_CATS = ["vorsorge", "zahnprophylaxe"];
+export const isDental = k => DENTAL_CATS.includes(k);
+export const isNeutral = k => NEUTRAL_CATS.includes(k);
 
-const rates = (over = {}) => ({ ambulant: 100, zahn: 100, zahnersatz: 90, heilmittel: 100, logopaedie: 100, ergotherapie: 100, arznei: 100, hilfsmittel: 100, sehhilfe: 100, stationaer: 100, vorsorge: 100, ...over });
+const rates = (over = {}) => ({ ambulant: 100, zahn: 100, zahnersatz: 90, heilmittel: 100, logopaedie: 100, ergotherapie: 100, arznei: 100, hilfsmittel: 100, sehhilfe: 100, stationaer: 100, vorsorge: 100, zahnprophylaxe: 100, ...over });
 
 export const PRESETS = [
   {
     id: "universa-top300", insurer: "uniVersa", tariff: "uni-Top|Privat 300", deadlines: "universa",
     adult: { sb: 300, breFix: 600 }, child: { sb: 150, breFix: 300 },
-    common: { sbDental: true, sbQuarterRule: false, breMonate: 2.5, breVariableFirstYear: false, breEstimated: false, basisPct: 85, offset: false, rates: rates() },
+    common: { sbDental: true, sbQuarterRule: false, breMonate: 2.5, breVariableFirstYear: false, breEstimated: false, basisPct: 85, offset: false, rates: rates(), dentalCaps: [1500, 3000, 4500, 6000] },
     note: "Reichst du nach Auszahlung der garantierten BRE noch Rechnungen für dasselbe Jahr ein, verrechnet uniVersa sie mit der BRE. Spätes Einreichen ist also möglich.",
   },
   {
     id: "signal-exklusiv1", insurer: "Signal Iduna", tariff: "EXKLUSIV 1", deadlines: "signal",
     adult: { sb: 480 }, child: { sb: 240 },
-    common: { breFix: 0, sbDental: false, sbQuarterRule: true, breMonate: 1, breVariableFirstYear: true, breEstimated: true, basisPct: 80, offset: false, rates: rates({ heilmittel: 80, logopaedie: 80, ergotherapie: 80 }), caps: "bbhv" },
+    common: { breFix: 0, sbDental: false, sbQuarterRule: true, breMonate: 1, breVariableFirstYear: true, breEstimated: true, basisPct: 80, offset: false, rates: rates({ heilmittel: 80, logopaedie: 80, ergotherapie: 80 }), caps: "bbhv", dentalCaps: [750, 1500, 3000, 4500] },
     note: "Selbstbehalt gilt nur für ambulant und stationär, nicht für Zahnleistungen. Die erfolgsabhängige BRE legt Signal Iduna jedes Jahr neu fest (Kinder: die Hälfte).",
   },
   {
@@ -99,6 +103,45 @@ export function personFromPreset(presetId, kind, extra = {}) {
 export const yearOf = inv => Number(String(inv.datum || "").slice(0, 4)) || new Date().getFullYear();
 const num = v => Number(v) || 0;
 
+// ---------- Zahn-Höchstbeträge der ersten Versicherungsjahre ----------
+// Das 1. Versicherungsjahr läuft vom Versicherungsbeginn bis 31.12., danach je Kalenderjahr.
+export const dentalCapsOf = p => {
+  if (Array.isArray(p.dentalCaps)) return p.dentalCaps.filter(x => Number(x) > 0).length ? p.dentalCaps.map(Number) : null;
+  return PRESETS.find(x => x.id === p.presetId)?.common.dentalCaps || null;
+};
+const startYearOf = p => Number(String(p.start || "").slice(0, 4)) || null;
+const rateOf = (p, k) => num(p.rates?.[k] ?? (CAPPED_CATS.includes(k) ? p.rates?.heilmittel : undefined) ?? 100) / 100;
+const baseOf = (p, i) => { const pc = positionCheck(p, i); return { pc, base: pc.rows.length ? Math.min(num(i.betrag), pc.recognized + pc.rest) : num(i.betrag) }; };
+const wasReimbursed = i => i.eingereicht || (i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "");
+
+export function dentalLedger(p, invoices, year) {
+  const caps = dentalCapsOf(p), sy = startYearOf(p);
+  const idx = sy ? year - sy + 1 : null;
+  const limitFor = y => { if (!caps || !sy) return Infinity; const n = y - sy + 1; return n >= 1 && n <= caps.length ? caps[n - 1] : Infinity; };
+  const map = {};
+  let used = 0, usedBefore = 0, usedThis = 0, cutThis = 0, accident = 0;
+  const list = invoices.filter(i => i.personId === p.id && isDental(i.kategorie) && yearOf(i) <= year && (!sy || yearOf(i) >= sy))
+    .sort((a, b) => (a.datum || "").localeCompare(b.datum || ""));
+  for (const i of list) {
+    const y = yearOf(i);
+    const benefit = baseOf(p, i).base * rateOf(p, i.kategorie);
+    let granted = benefit;
+    const counts = y === year || wasReimbursed(i);
+    if (i.unfall) { if (y === year) accident += benefit; }
+    else if (counts) {
+      const lim = limitFor(y);
+      if (lim !== Infinity) granted = Math.min(benefit, Math.max(0, lim - used));
+      used += granted;
+      if (y < year) usedBefore += granted; else usedThis += granted;
+    }
+    if (y === year) cutThis += benefit - granted;
+    map[i.id] = { benefit, granted, cut: benefit - granted };
+  }
+  const limit = limitFor(year);
+  return { map, active: limit !== Infinity, idx, limit, usedBefore, usedThis, cutThis, accident,
+    remaining: limit === Infinity ? Infinity : Math.max(0, limit - usedBefore - usedThis), endsYear: caps && sy ? sy + caps.length : null, caps, startYear: sy };
+}
+
 function firstYearInfo(p, year) {
   const st = String(p.start || "");
   const sy = Number(st.slice(0, 4)), sm = Number(st.slice(5, 7));
@@ -111,41 +154,42 @@ function firstYearInfo(p, year) {
 
 export function calc(p, invoices, year, taxRatePct) {
   const inv = invoices.filter(i => i.personId === p.id && yearOf(i) === year);
-  const regular = inv.filter(i => i.kategorie !== "vorsorge");
-  const neutral = inv.filter(i => i.kategorie === "vorsorge");
-  const rate = i => num(p.rates?.[i.kategorie] ?? (CAPPED_CATS.includes(i.kategorie) ? p.rates?.heilmittel : undefined) ?? 100) / 100;
-  // Erstattungsfähiger Betrag: bei Positionen mit Höchstbetrag gekappt
-  const base = i => { const pc = positionCheck(p, i); return { pc, base: pc.rows.length ? Math.min(num(i.betrag), pc.recognized + pc.rest) : num(i.betrag) }; };
+  const regular = inv.filter(i => !isNeutral(i.kategorie));
+  const neutral = inv.filter(i => isNeutral(i.kategorie));
+  const rate = i => rateOf(p, i.kategorie);
+  const base = i => baseOf(p, i);
   const sbApplies = i => p.sbDental !== false || !isDental(i.kategorie);
+  const dental = dentalLedger(p, invoices, year);
+  const dCut = i => dental.map[i.id]?.cut || 0;
   const total = inv.reduce((a, i) => a + num(i.betrag), 0);
-  const eligibleSb = regular.filter(sbApplies).reduce((a, i) => a + base(i).base * rate(i), 0);
-  const eligibleFree = regular.filter(i => !sbApplies(i)).reduce((a, i) => a + base(i).base * rate(i), 0);
-  const eligible = eligibleSb + eligibleFree;
-  const neutralRefund = neutral.reduce((a, i) => a + num(i.betrag) * rate(i), 0);
   const fy = firstYearInfo(p, year);
   const sb = num(p.sb) * fy.sbFactor;
-  const payout = Math.max(0, eligibleSb - sb) + eligibleFree;
   const breFix = num(p.breFix) * fy.months / 12;
   const breVar = fy.first && !p.breVariableFirstYear ? 0 : num(p.breMonate) * num(p.beitrag) * fy.months / 12;
   const bre = breFix + breVar;
   const breTax = bre * (num(p.basisPct) / 100) * (num(taxRatePct) / 100);
   const breNet = bre - breTax;
-  // Aufschlüsselung je Rechnung: Selbstbehalt chronologisch verrechnen
+  // Aufschlüsselung je Rechnung: Höchstbeträge, Satz, dann Selbstbehalt chronologisch
   let sbRemaining = sb;
   const lines = [...regular].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
-    const amount = num(i.betrag), r = rate(i), b = base(i), elig = b.base * r;
+    const amount = num(i.betrag), r = rate(i), b = base(i), dentalCut = dCut(i), elig = b.base * r - dentalCut;
     const sbPart = sbApplies(i) ? Math.min(sbRemaining, elig) : 0;
     sbRemaining -= sbPart;
     const capCut = amount - b.base;
-    return { inv: i, amount, rate: r, eligible: elig, capCut, rateCut: b.base - elig, notCovered: amount - elig, sbPart, refund: elig - sbPart, sbFree: !sbApplies(i), pc: b.pc };
+    return { inv: i, amount, rate: r, eligible: elig, capCut, rateCut: b.base - b.base * r, dentalCut, notCovered: amount - elig, sbPart, refund: elig - sbPart, sbFree: !sbApplies(i), pc: b.pc };
   });
   const neutralLines = [...neutral].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
-    const amount = num(i.betrag), r = rate(i), elig = amount * r;
-    return { inv: i, amount, rate: r, eligible: elig, notCovered: amount - elig, sbPart: 0, refund: elig, neutral: true };
+    const amount = num(i.betrag), r = rate(i), dentalCut = dCut(i), elig = amount * r - dentalCut;
+    return { inv: i, amount, rate: r, eligible: elig, capCut: 0, rateCut: amount - amount * r, dentalCut, notCovered: amount - elig, sbPart: 0, refund: elig, neutral: true };
   });
+  const eligible = lines.reduce((a, l) => a + l.eligible, 0);
+  const eligibleSb = lines.filter(l => !l.sbFree).reduce((a, l) => a + l.eligible, 0);
+  const neutralRefund = neutralLines.reduce((a, l) => a + l.refund, 0);
+  const payout = lines.reduce((a, l) => a + l.refund, 0);
   const sbUsed = sb - sbRemaining;
   const notCovered = lines.reduce((a, l) => a + l.notCovered, 0);
   const capCut = lines.reduce((a, l) => a + l.capCut, 0);
+  const dentalCut = lines.reduce((a, l) => a + l.dentalCut, 0);
   const regularTotal = lines.reduce((a, l) => a + l.amount, 0);
   const submitted = regular.filter(i => i.eingereicht);
   const unsubmitted = regular.filter(i => !i.eingereicht);
@@ -165,7 +209,7 @@ export function calc(p, invoices, year, taxRatePct) {
   const threshold = eligible + rest;
   const submitWins = p.offset || breLost || payout > breNet;
   const best = breLost ? payout : Math.max(payout, breNet);
-  return { lines, neutralLines, sbUsed, notCovered, capCut, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
+  return { dental, dentalCut, lines, neutralLines, sbUsed, notCovered, capCut, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
     rest, threshold, fy, verdict, tone, submitted, unsubmitted, breLost, submitWins, best };
 }
 

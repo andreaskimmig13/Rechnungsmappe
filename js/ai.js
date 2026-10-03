@@ -16,7 +16,7 @@ Personen im Haushalt: ${names}.
 ${pdfText ? `Eingebetteter Text der Rechnung:\n"""\n${pdfText.slice(0, 12000)}\n"""\n` : ""}
 Antworte ausschließlich mit einem JSON-Objekt:
 {"datum":"YYYY-MM-DD","arzt":"Praxis oder Name","betrag":123.45,"faellig":"YYYY-MM-DD","patient":"Vorname","kategorie":"ambulant","kurz":"kurze Beschreibung","positionen":[{"text":"Einzelbehandlung 45 Min.","anzahl":10,"einzelpreis":85.00,"bbhv":"51b"}]}
-Regeln: datum = Rechnungsdatum. betrag = zu zahlender Gesamtbetrag in Euro als Zahl. faellig = Zahlungsziel; steht dort "innerhalb von N Tagen", rechne es aus; sonst null. patient = behandelte Person, möglichst einer der Haushaltsnamen, sonst null. kategorie = genau einer von: ${CAT_KEYS.join(", ")} (vorsorge = Vorsorgeuntersuchung, Schutzimpfung, professionelle Zahnreinigung). kurz = höchstens 8 Wörter, z. B. "MRT Knie". Unlesbare Felder = null.
+Regeln: datum = Rechnungsdatum. betrag = zu zahlender Gesamtbetrag in Euro als Zahl. faellig = Zahlungsziel; steht dort "innerhalb von N Tagen", rechne es aus; sonst null. patient = behandelte Person, möglichst einer der Haushaltsnamen, sonst null. kategorie = genau einer von: ${CAT_KEYS.join(", ")} (vorsorge = Vorsorgeuntersuchung, Schutzimpfung; zahnprophylaxe = professionelle Zahnreinigung, Zahnprophylaxe). kurz = höchstens 8 Wörter, z. B. "MRT Knie". Unlesbare Felder = null.
 positionen: NUR bei Logopädie oder Ergotherapie, sonst []. Fasse gleiche Leistungen mit gleichem Einzelpreis zu einer Position zusammen (anzahl = Anzahl der Termine). bbhv = passende Nummer aus Anlage 9 BBhV oder null: ${BBHV.items.map(x => `${x.code} ${x.l}`).join("; ")}.`;
 }
 
