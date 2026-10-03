@@ -80,6 +80,21 @@ export function calc(p, invoices, year, taxRatePct) {
   const bre = breFix + breVar;
   const breTax = bre * (num(p.basisPct) / 100) * (num(taxRatePct) / 100);
   const breNet = bre - breTax;
+  // Aufschlüsselung je Rechnung: Selbstbehalt chronologisch verrechnen
+  let sbRemaining = sb;
+  const lines = [...regular].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
+    const amount = num(i.betrag), r = rate(i), elig = amount * r;
+    const sbPart = sbApplies(i) ? Math.min(sbRemaining, elig) : 0;
+    sbRemaining -= sbPart;
+    return { inv: i, amount, rate: r, eligible: elig, notCovered: amount - elig, sbPart, refund: elig - sbPart, sbFree: !sbApplies(i) };
+  });
+  const neutralLines = [...neutral].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
+    const amount = num(i.betrag), r = rate(i), elig = amount * r;
+    return { inv: i, amount, rate: r, eligible: elig, notCovered: amount - elig, sbPart: 0, refund: elig, neutral: true };
+  });
+  const sbUsed = sb - sbRemaining;
+  const notCovered = lines.reduce((a, l) => a + l.notCovered, 0);
+  const regularTotal = lines.reduce((a, l) => a + l.amount, 0);
   const submitted = regular.filter(i => i.eingereicht);
   const unsubmitted = regular.filter(i => !i.eingereicht);
   const breLost = submitted.length > 0 && !p.offset;
@@ -98,7 +113,7 @@ export function calc(p, invoices, year, taxRatePct) {
   const threshold = eligible + rest;
   const submitWins = p.offset || breLost || payout > breNet;
   const best = breLost ? payout : Math.max(payout, breNet);
-  return { inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
+  return { lines, neutralLines, sbUsed, notCovered, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
     rest, threshold, fy, verdict, tone, submitted, unsubmitted, breLost, submitWins, best };
 }
 

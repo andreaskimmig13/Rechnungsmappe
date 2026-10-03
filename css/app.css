@@ -101,6 +101,34 @@ button { cursor: pointer; }
 .g-fill { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--acc); }
 .g-mark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink); }
 
+/* Rechenweg */
+.wf { display: flex; flex-direction: column; border-radius: 12px; background: var(--ground); padding: 4px 12px; }
+.wf-r { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; font-size: 14px; border-top: 1px dashed var(--line); }
+.wf-r:first-child { border-top: 0; }
+.wf-r .num { white-space: nowrap; }
+.wf-r.minus { color: var(--muted); }
+.wf-r.sum { border-top: 1.5px solid var(--ink); font-weight: 600; }
+.wf-r.sum .num { color: var(--good); }
+.wf-r.extra { color: var(--muted); font-size: 13px; }
+.wf-r.diff .num { color: var(--warn); font-weight: 600; }
+.vs { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); }
+.vs > span:first-child { display: flex; flex-direction: column; min-width: 0; }
+.vs.win { border-color: var(--good); background: var(--good-soft); }
+.vs.win .big-n { color: var(--good); }
+.self-start { align-self: flex-start; }
+.family { display: flex; flex-direction: column; gap: 8px; }
+.fam-row { display: flex; align-items: baseline; gap: 10px; }
+.fam-n { font-size: 26px; font-weight: 600; }
+.fam-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 8px; border-top: 1px solid var(--line2); }
+.fam-grid > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fam-grid .num { font-size: 14px; }
+.exp { color: var(--good); }
+.bk { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; text-decoration: none; color: var(--ink); }
+.bk:active { background: var(--line2); }
+.bk strong { font-weight: 600; overflow-wrap: anywhere; }
+.bk-calc { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: baseline; color: var(--muted); padding: 4px 0; }
+.bk-sum { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 12px 16px; font-size: 13px; font-weight: 600; background: var(--ground); }
+
 /* Balken */
 .bars { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; align-items: end; height: 150px; border-bottom: 1px solid var(--line); padding-top: 22px; }
 .bar { position: relative; border-radius: 3px; background: var(--hatch); }

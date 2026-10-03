@@ -4,7 +4,7 @@ import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "1.0.1";
+const APP_VERSION = "1.1.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -234,27 +234,84 @@ function gauge(r) {
     <div class="g-sb" style="width:${pct(r.sb)}%"></div><div class="g-fill" style="width:${pct(r.eligible)}%"></div><div class="g-mark" style="left:${pct(r.threshold)}%"></div></div>`;
 }
 
+// Rechenweg: Rechnungssumme → nicht erstattet → Selbstbehalt → Erstattung
+function waterfall(r, { compact = false } = {}) {
+  const row = (label, val, cls = "") => `<div class="wf-r ${cls}"><span>${label}</span><span class="num">${val}</span></div>`;
+  const n = r.lines.length;
+  return `<div class="wf">
+    ${row(`Rechnungen ${ui.year} (${n} Stück)`, fmtEur(r.regularTotal))}
+    ${r.notCovered > 0.004 || !compact ? row("− nicht erstattet (Tarif unter 100 %)", fmtEur(r.notCovered), "minus") : ""}
+    ${row(`− Selbstbehalt${r.sb > r.sbUsed + 0.004 ? ` (${fmtEur(r.sb - r.sbUsed)} noch offen)` : ""}`, fmtEur(r.sbUsed), "minus")}
+    ${row("= Erstattung bei Einreichung", fmtEur(r.payout), "sum")}
+    ${r.neutralLines.length ? row(`+ Vorsorge/Impfung (${r.neutralLines.length}), BRE-neutral`, fmtEur(r.neutralRefund), "extra") : ""}
+  </div>`;
+}
+
 function personCard(p, r) {
   const y = ui.year;
-  if (r.fy.before) return `<article class="card pcard"><div class="pc-head"><div><a class="pc-name" href="#/person/${p.id}">${esc(p.name)}</a><span class="muted small">${esc(p.insurer)} · ${esc(p.tariff)}</span></div><span class="pill muted">Noch nicht versichert</span></div></article>`;
-  const compact = r.regular.length === 0 && !p.offset;
+  const head = `<div class="pc-head"><div><a class="pc-name" href="#/jahr/${p.id}/${y}">${esc(p.name)}</a><span class="muted small">${esc(p.insurer)} · ${esc(p.tariff)}</span></div><span class="pill ${r.fy.before ? "muted" : r.tone}">${esc(r.verdict)}</span></div>`;
+  if (r.fy.before) return `<article class="card pcard">${head}</article>`;
   const breLine = r.breLost ? "entfällt, da eingereicht" : `${fmtEur(r.bre)} − ${fmtEur(r.breTax)} Steuer`;
-  if (compact) return `<article class="card pcard">
-    <div class="pc-head"><div><a class="pc-name" href="#/person/${p.id}">${esc(p.name)}</a><span class="muted small">${esc(p.insurer)} · ${esc(p.tariff)}</span></div><span class="pill ${r.tone}">${esc(r.verdict)}</span></div>
+  const open = `<a class="btn sm" href="#/jahr/${p.id}/${y}">${ic("list", 18)} Rechnungen ansehen</a>`;
+  if (r.regular.length === 0 && !p.offset) return `<article class="card pcard">
+    ${head}
     ${gauge(r)}
     <div class="split small muted"><span>${r.neutral.length ? `${r.neutral.length} Vorsorge-Rechnung(en), BRE-neutral` : `Keine Rechnungen ${y}`}</span><span>BRE netto <b class="num good-t">${fmtEur(r.breNet)}</b></span></div>
+    ${r.inv.length ? open : ""}
   </article>`;
   return `<article class="card pcard">
-    <div class="pc-head"><div><a class="pc-name" href="#/person/${p.id}">${esc(p.name)}</a><span class="muted small">${esc(p.insurer)} · ${esc(p.tariff)}</span></div><span class="pill ${r.tone}">${esc(r.verdict)}</span></div>
-    <div class="grid2">
-      <div class="kv ${r.submitWins ? "win" : ""}"><span class="eyebrow">Bei Einreichung</span><span class="num big-n">${fmtEur(r.payout)}</span><span class="muted xs">nach ${fmtEur(r.sb)} Selbstbehalt</span></div>
-      <div class="kv ${!r.submitWins ? "win" : ""}"><span class="eyebrow">BRE nach Steuer</span><span class="num big-n">${fmtEur(r.breLost ? 0 : r.breNet)}</span><span class="muted xs">${breLine}</span></div>
-    </div>
+    ${head}
+    ${waterfall(r, { compact: true })}
+    <div class="vs ${r.submitWins ? "" : "win"}"><span><span class="eyebrow">BRE nach Steuer</span><span class="xs muted">wenn du nichts einreichst · ${breLine}</span></span><span class="num big-n">${fmtEur(r.breLost ? 0 : r.breNet)}</span></div>
     <div class="stack-s">${gauge(r)}<div class="split xs muted"><span>Erstattungsfähig <b class="num ink">${fmtEur(r.eligible)}</b></span><span>Schwelle <b class="num ink">${fmtEur(r.threshold)}</b></span></div></div>
     ${!r.submitWins ? `<p class="small">Noch <b class="num">${fmtEur(r.rest)}</b> an Kosten, bis sich Einreichen lohnt. Bis dahin selbst zahlen.</p>` : ""}
-    ${r.submitWins && r.unsubmitted.length ? `<a class="btn primary" href="#/paket/${p.id}/${y}">${ic("share", 20)} Einreichungspaket (${r.unsubmitted.length})</a>` : ""}
+    <div class="row-btns">${open}${r.submitWins && r.unsubmitted.length ? `<a class="btn sm primary" href="#/paket/${p.id}/${y}">${ic("share", 18)} Einreichungspaket (${r.unsubmitted.length})</a>` : ""}</div>
     ${r.fy.first ? `<p class="xs muted">Erstes Versicherungsjahr: BRE anteilig für ${r.fy.months} Monate${r.fy.sbFactor < 1 ? ", Selbstbehalt gekürzt" : ""}.</p>` : ""}
   </article>`;
+}
+
+// Voraussichtliche Erstattung je Rechnung (für Liste und Detail)
+function expectedFor(invoices = S.invoices) {
+  const map = {};
+  const years = [...new Set(invoices.map(yearOf))];
+  for (const p of S.persons) for (const y of years) {
+    const r = calc(p, invoices, y, S.settings.taxRate);
+    for (const l of [...r.lines, ...r.neutralLines]) map[l.inv.id] = l;
+  }
+  return map;
+}
+
+// ---------- Aufschlüsselung pro Person und Jahr ----------
+function viewPersonYear(pid, year) {
+  const p = person(pid);
+  if (!p) { location.hash = "#/"; return; }
+  ui.year = year;
+  const r = calc(p, S.invoices, year, S.settings.taxRate);
+  const line = l => `<li><a class="bk" href="#/rechnung/${l.inv.id}">
+    <span class="split top-a"><strong>${esc(l.inv.arzt || "Ohne Praxisangabe")}</strong><span class="num strong nowrap">${fmtEur(l.amount)}</span></span>
+    <span class="xs muted">${fmtDate(l.inv.datum)} · ${esc(l.inv.notiz || catLabel(l.inv.kategorie))}</span>
+    <span class="bk-calc xs"><span>Satz ${Math.round(l.rate * 100)} %${l.notCovered > 0.004 ? ` · −${fmtEur(l.notCovered)}` : ""}</span><span>${l.neutral ? "ohne Selbstbehalt" : l.sbFree ? "ohne SB (Zahn)" : l.sbPart > 0.004 ? `SB −${fmtEur(l.sbPart)}` : "SB schon erreicht"}</span><span class="num strong ${l.refund > 0 ? "good-t" : "muted"}">${fmtEur(l.refund)}</span></span>
+    <span class="tags">${stamps(l.inv)}</span>
+  </a></li>`;
+  page(`${header(`${p.name} · ${year}`, { back: "#/", sub: `${p.insurer} · ${p.tariff}` })}
+    <main class="main">
+      <section class="card stack">
+        <span class="pill ${r.tone} self-start">${esc(r.verdict)}</span>
+        ${waterfall(r)}
+        <div class="vs ${r.submitWins ? "" : "win"}"><span><span class="eyebrow">BRE nach Steuer</span><span class="xs muted">${r.breLost ? "entfällt, da schon eingereicht" : `${fmtEur(r.bre)} brutto − ${fmtEur(r.breTax)} Steuer`}</span></span><span class="num big-n">${fmtEur(r.breLost ? 0 : r.breNet)}</span></div>
+      </section>
+      <section class="stack-s">
+        <div class="split"><h2 class="h3">Rechnungen ${year}</h2><span class="xs muted">Selbstbehalt in Datumsreihenfolge</span></div>
+        ${r.lines.length ? `<ul class="card inv-list">${r.lines.map(line).join("")}
+          <li class="bk-sum"><span>Summe Rechnungen</span><span class="num">${fmtEur(r.regularTotal)}</span><span>Selbstbehalt</span><span class="num">−${fmtEur(r.sbUsed)}</span><span class="strong">Erstattung</span><span class="num strong good-t">${fmtEur(r.payout)}</span></li></ul>`
+          : `<div class="card empty small">Keine regulären Rechnungen ${year}.</div>`}
+      </section>
+      ${r.neutralLines.length ? `<section class="stack-s"><div class="split"><h2 class="h3">Vorsorge und Impfungen</h2><span class="xs muted">BRE-neutral, ohne Selbstbehalt</span></div>
+        <ul class="card inv-list">${r.neutralLines.map(line).join("")}</ul>
+        <p class="xs muted">Nur BRE-neutral, wenn die Voraussetzungen des Vorsorgeverzeichnisses deines Tarifs erfüllt sind. Kannst du jederzeit einreichen.</p></section>` : ""}
+      ${r.submitWins && r.unsubmitted.length ? `<a class="btn primary big" href="#/paket/${p.id}/${year}">${ic("share", 20)} Einreichungspaket erstellen</a>` : ""}
+      ${p.note ? `<p class="foot">${esc(p.note)}</p>` : ""}
+    </main>`, "home");
 }
 
 function viewHome() {
@@ -267,6 +324,7 @@ function viewHome() {
   const months = Array.from({ length: 12 }, (_, m) => S.invoices.filter(i => yearOf(i) === y && Number(i.datum.slice(5, 7)) === m + 1).reduce((a, i) => a + Number(i.betrag || 0), 0));
   const mMax = Math.max(...months, 1);
   const yearSum = months.reduce((a, b) => a + b, 0);
+  const yearInv = S.invoices.filter(i => yearOf(i) === y);
   const curM = new Date().getFullYear() === y ? new Date().getMonth() : (y < new Date().getFullYear() ? 11 : -1);
   const dl = deadlines(S.persons, S.invoices).filter(d => !d.overdue).slice(0, 3);
   const standalone = matchMedia("(display-mode: standalone)").matches;
@@ -281,6 +339,15 @@ function viewHome() {
       ${late.length ? `<section class="alert">${ic("alert", 24)}<div class="stack-s"><strong>${late.length === 1 ? "1 Rechnung" : late.length + " Rechnungen"} über dem Zahlungsziel</strong>
         <span class="small">${late.slice(0, 3).map(i => `${esc(short(i.arzt))} ${fmtEur(i.betrag)} (fällig ${fmtShort(i.faellig)})`).join(" · ")}</span>
         <div class="row-btns"><a class="btn danger-solid" href="#/rechnungen" data-filter="unpaid">Ansehen</a><button class="btn danger-line" type="button" id="paid-all">Als bezahlt markieren</button></div></div></section>` : ""}
+      <section class="card family">
+        <div class="split"><span class="eyebrow">Rechnungen ${y} · Familie</span><span class="xs muted">${yearInv.length} Stück</span></div>
+        <div class="fam-row"><span class="num fam-n">${fmtEur(yearSum)}</span><span class="small muted">Rechnungssumme</span></div>
+        <div class="fam-grid">
+          <div><span class="num strong">${fmtEur(results.reduce((a, x) => a + x.r.payout + x.r.neutralRefund, 0))}</span><span class="xs muted">Erstattung bei Einreichung</span></div>
+          <div><span class="num strong">${fmtEur(results.reduce((a, x) => a + x.r.sbUsed, 0))}</span><span class="xs muted">Selbstbehalt</span></div>
+          <div><span class="num strong">${fmtEur(results.reduce((a, x) => a + x.r.notCovered, 0))}</span><span class="xs muted">nicht erstattet</span></div>
+        </div>
+      </section>
       <section class="grid2">
         <div class="card tile"><span class="eyebrow">Offen zu zahlen</span><span class="num tile-n ${late.length ? "bad-t" : ""}">${fmtEur(unpaid.reduce((a, i) => a + Number(i.betrag || 0), 0))}</span><span class="small muted">${unpaid.length} Rechnung${unpaid.length === 1 ? "" : "en"}${pending.length ? ` · ${pending.length} Erstattung offen` : ""}</span></div>
         <div class="card tile"><span class="eyebrow">Rückfluss ${y}</span><span class="num tile-n good-t">${fmtEur(back)}</span><span class="small muted">nach Steuer, beste Wahl</span></div>
@@ -337,6 +404,7 @@ function viewList() {
   if (q) list = list.filter(i => `${i.arzt} ${i.notiz} ${catLabel(i.kategorie)}`.toLowerCase().includes(q));
   list = [...list].sort((a, b) => (b.datum || "").localeCompare(a.datum || ""));
   const sum = list.reduce((a, i) => a + Number(i.betrag || 0), 0);
+  const exp = expectedFor();
   const chip = (attr, val, label, cur) => `<button type="button" class="chip" data-${attr}="${val}" aria-pressed="${cur === val}">${label}</button>`;
 
   page(`${header("Rechnungen", { right: `<label class="year-sel"><span class="sr">Jahr</span><select id="year">${yearOptions()}</select></label>` })}
@@ -349,6 +417,7 @@ function viewList() {
         <span class="thumb" data-thumb="${i.pages?.[0]?.id || ""}">${ic("file", 22)}</span>
         <span class="inv-b"><span class="split top-a"><strong>${esc(i.arzt || "Ohne Praxisangabe")}</strong><span class="num strong nowrap">${fmtEur(i.betrag)}</span></span>
         <span class="small muted">${fmtDate(i.datum)} · ${esc(person(i.personId)?.name || "?")} · ${esc(i.notiz || catLabel(i.kategorie))}</span>
+        ${exp[i.id] ? `<span class="xs exp">voraussichtlich erstattet bei Einreichung: <b class="num">${fmtEur(exp[i.id].refund)}</b>${exp[i.id].sbPart > 0.004 ? ` (Selbstbehalt −${fmtEur(exp[i.id].sbPart)})` : ""}</span>` : ""}
         <span class="tags">${stamps(i)}</span></span></a></li>`).join("")}</ul>`
         : `<div class="card empty"><p>${S.invoices.length ? "Keine Rechnungen für diese Auswahl." : "Noch keine Rechnungen."}</p><a class="btn primary" href="#/neu">${ic("cam", 20)} Erste Rechnung erfassen</a></div>`}
     </main>`, "list");
@@ -419,6 +488,7 @@ function viewEdit() {
         <p class="xs muted">KI: ${esc(prov.label)}. Nur die Seitenbilder dieser Rechnung werden gesendet.</p>
       </section>` : ""}
 
+      ${refundBox()}
       <form id="inv-form" class="stack" novalidate>
         <h2 class="h3">Angaben ${draft.isNew ? "prüfen" : ""}</h2>
         <label class="field"><span>Für ${fieldState("personId")}</span><select id="f-person" class="${flagCls("personId")}">${S.persons.map(p => `<option value="${p.id}" ${p.id === i.personId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
@@ -452,8 +522,31 @@ function viewEdit() {
   $("#f-share")?.addEventListener("click", shareBeleg);
   // Eingaben sofort in den Entwurf übernehmen, damit ein Neuzeichnen nichts verliert
   const FIELD = { "f-person": "personId", "f-arzt": "arzt", "f-datum": "datum", "f-betrag": "betrag", "f-faellig": "faellig", "f-kat": "kategorie", "f-notiz": "notiz" };
-  $("#inv-form").addEventListener("input", e => { const k = FIELD[e.target.id]; if (k) { draft.src[k] = "user"; e.target.classList.remove("f-ki", "f-chk"); e.target.closest(".field")?.querySelector(".fs")?.remove(); } collectForm(); });
+  $("#inv-form").addEventListener("input", e => { const k = FIELD[e.target.id]; if (k) { draft.src[k] = "user"; e.target.classList.remove("f-ki", "f-chk"); e.target.closest(".field")?.querySelector(".fs")?.remove(); } collectForm(); const box = $("#refund-box"); const html = refundBox(); if (box) { if (html) box.outerHTML = html; else box.remove(); } else if (html) $("#inv-form").insertAdjacentHTML("beforebegin", html); });
   $("#inv-form").addEventListener("change", collectForm);
+}
+
+function refundBox() {
+  const i = draft.inv;
+  if (!(Number(i.betrag) > 0) || !i.personId || !i.datum) return "";
+  const others = S.invoices.filter(x => x.id !== i.id);
+  const l = expectedFor([...others, i])[i.id];
+  if (!l) return "";
+  const p = person(i.personId);
+  const real = i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "";
+  const row = (a, b, cls = "") => `<div class="wf-r ${cls}"><span>${a}</span><span class="num">${b}</span></div>`;
+  return `<section class="card stack-s" id="refund-box">
+    <div class="split"><h2 class="h3">Erstattung</h2><a class="xs" href="#/jahr/${i.personId}/${yearOf(i)}">Alle Rechnungen ${esc(p?.name || "")} ${yearOf(i)}</a></div>
+    <div class="wf">
+      ${row("Rechnungsbetrag", fmtEur(l.amount))}
+      ${row(`− nicht erstattet (Satz ${Math.round(l.rate * 100)} %)`, fmtEur(l.notCovered), "minus")}
+      ${row(l.neutral ? "− Selbstbehalt (entfällt bei Vorsorge)" : l.sbFree ? "− Selbstbehalt (gilt nicht für Zahn)" : "− Anteil am Selbstbehalt", fmtEur(l.sbPart), "minus")}
+      ${row("= voraussichtlich erstattet", fmtEur(l.refund), "sum")}
+      ${real ? row("tatsächlich erstattet", fmtEur(i.erstattet), Math.abs(Number(i.erstattet) - l.refund) < 0.01 ? "extra" : "diff") : ""}
+    </div>
+    ${real && Math.abs(Number(i.erstattet) - l.refund) >= 0.01 ? `<p class="xs muted">Abweichung ${fmtEur(Number(i.erstattet) - l.refund)} – prüfe den Leistungsbescheid oder die Erstattungssätze im Tarif.</p>` : ""}
+    ${!l.neutral && !l.sbFree ? `<p class="xs muted">Der Selbstbehalt wird auf die Rechnungen des Jahres in Datumsreihenfolge verrechnet.</p>` : ""}
+  </section>`;
 }
 
 function collectForm() {
@@ -941,6 +1034,7 @@ async function route() {
       return viewEdit();
     }
     case "paket": return viewPackage(parts[1], Number(parts[2]) || ui.year);
+    case "jahr": return viewPersonYear(parts[1], Number(parts[2]) || ui.year);
     case "fristen": return viewDeadlines();
     case "einstellungen": return viewSettings();
     case "person": return viewPerson(parts[1]);
