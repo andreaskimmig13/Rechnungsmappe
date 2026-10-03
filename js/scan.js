@@ -151,6 +151,19 @@ export function parseInvoice(text, persons = []) {
   }
   if (datum) { out.fields.datum = datum; out.sure.datum = sureDate; }
 
+  // Behandlungsdatum: ausdrückliche Angabe oder früheste Datumsangabe in Leistungszeilen
+  let beh = null, sureBeh = false;
+  for (const l of lines) {
+    if (/behandlungsdatum|behandlung am|leistungsdatum|datum der behandlung|behandlungszeitraum|leistungszeitraum|behandelt am/i.test(l)) { const d = datesIn(l).sort()[0]; if (d) { beh = d; sureBeh = true; break; } }
+  }
+  const leist = lines.filter(l => /^\s*\d{1,2}\s?\.\s?\d{1,2}\s?\.\s?\d{2,4}/.test(l) && /\d,\d{2}(?!\d)/.test(l)).flatMap(l => datesIn(l).slice(0, 1));
+  const allTreat = [...(beh ? [beh] : []), ...leist].filter(d => d <= (datum || today)).sort();
+  if (!beh && allTreat.length) beh = allTreat[0];
+  if (beh && datum && beh.slice(0, 4) !== datum.slice(0, 4)) { out.fields.behandlung = beh; out.sure.behandlung = sureBeh; }
+  else if (beh && beh !== datum) { out.fields.behandlung = beh; out.sure.behandlung = sureBeh; }
+  const years = [...new Set(allTreat.map(d => d.slice(0, 4)))];
+  if (years.length > 1) out.spansYears = years;
+
   // Zahlungsziel
   let faellig = null, sureDue = false;
   for (const l of lines) {

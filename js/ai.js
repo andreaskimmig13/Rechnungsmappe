@@ -15,8 +15,8 @@ function prompt(persons, pdfText) {
 Personen im Haushalt: ${names}.
 ${pdfText ? `Eingebetteter Text der Rechnung:\n"""\n${pdfText.slice(0, 12000)}\n"""\n` : ""}
 Antworte ausschließlich mit einem JSON-Objekt:
-{"datum":"YYYY-MM-DD","arzt":"Praxis oder Name","betrag":123.45,"faellig":"YYYY-MM-DD","patient":"Vorname","kategorie":"ambulant","kurz":"kurze Beschreibung","positionen":[{"text":"Einzelbehandlung 45 Min.","anzahl":10,"einzelpreis":85.00,"bbhv":"51b"}]}
-Regeln: datum = Rechnungsdatum. betrag = zu zahlender Gesamtbetrag in Euro als Zahl. faellig = Zahlungsziel; steht dort "innerhalb von N Tagen", rechne es aus; sonst null. patient = behandelte Person, möglichst einer der Haushaltsnamen, sonst null. kategorie = genau einer von: ${CAT_KEYS.join(", ")} (vorsorge = Vorsorgeuntersuchung, Schutzimpfung; zahnprophylaxe = professionelle Zahnreinigung, Zahnprophylaxe). kurz = höchstens 8 Wörter, z. B. "MRT Knie". Unlesbare Felder = null.
+{"datum":"YYYY-MM-DD","behandlung":"YYYY-MM-DD","behandlung_bis":"YYYY-MM-DD","arzt":"Praxis oder Name","betrag":123.45,"faellig":"YYYY-MM-DD","patient":"Vorname","kategorie":"ambulant","kurz":"kurze Beschreibung","positionen":[{"text":"Einzelbehandlung 45 Min.","anzahl":10,"einzelpreis":85.00,"bbhv":"51b"}]}
+Regeln: datum = Rechnungsdatum. behandlung = Datum der ersten Behandlung/Leistung (aus den Leistungszeilen), behandlung_bis = Datum der letzten Behandlung; null, wenn nicht erkennbar. betrag = zu zahlender Gesamtbetrag in Euro als Zahl. faellig = Zahlungsziel; steht dort "innerhalb von N Tagen", rechne es aus; sonst null. patient = behandelte Person, möglichst einer der Haushaltsnamen, sonst null. kategorie = genau einer von: ${CAT_KEYS.join(", ")} (vorsorge = Vorsorgeuntersuchung, Schutzimpfung; zahnprophylaxe = professionelle Zahnreinigung, Zahnprophylaxe). kurz = höchstens 8 Wörter, z. B. "MRT Knie". Unlesbare Felder = null.
 positionen: NUR bei Logopädie oder Ergotherapie, sonst []. Fasse gleiche Leistungen mit gleichem Einzelpreis zu einer Position zusammen (anzahl = Anzahl der Termine). bbhv = passende Nummer aus Anlage 9 BBhV oder null: ${BBHV.items.map(x => `${x.code} ${x.l}`).join("; ")}.`;
 }
 
@@ -95,6 +95,8 @@ function normalize(r, persons) {
   const fields = {};
   if (iso(r.datum)) fields.datum = r.datum;
   if (iso(r.faellig)) fields.faellig = r.faellig;
+  if (iso(r.behandlung) && r.behandlung !== r.datum) fields.behandlung = r.behandlung;
+  if (iso(r.behandlung) && iso(r.behandlung_bis) && r.behandlung.slice(0, 4) !== r.behandlung_bis.slice(0, 4)) fields.spansYears = [r.behandlung.slice(0, 4), r.behandlung_bis.slice(0, 4)];
   if (r.arzt) fields.arzt = String(r.arzt).slice(0, 120);
   const b = typeof r.betrag === "string" ? Number(r.betrag.replace(/\./g, "").replace(",", ".")) : Number(r.betrag);
   if (b > 0) fields.betrag = Math.round(b * 100) / 100;

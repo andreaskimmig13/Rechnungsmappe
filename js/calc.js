@@ -100,7 +100,10 @@ export function personFromPreset(presetId, kind, extra = {}) {
   };
 }
 
-export const yearOf = inv => Number(String(inv.datum || "").slice(0, 4)) || new Date().getFullYear();
+// Maßgeblich ist das Jahr der Behandlung (beide Tarife), nicht das Rechnungsdatum
+export const effDate = inv => inv.behandlung || inv.datum || "";
+export const yearOf = inv => Number(String(effDate(inv)).slice(0, 4)) || new Date().getFullYear();
+const byDate = (a, b) => effDate(a).localeCompare(effDate(b));
 const num = v => Number(v) || 0;
 
 // ---------- Zahn-Höchstbeträge der ersten Versicherungsjahre ----------
@@ -121,7 +124,7 @@ export function dentalLedger(p, invoices, year) {
   const map = {};
   let used = 0, usedBefore = 0, usedThis = 0, cutThis = 0, accident = 0;
   const list = invoices.filter(i => i.personId === p.id && isDental(i.kategorie) && yearOf(i) <= year && (!sy || yearOf(i) >= sy))
-    .sort((a, b) => (a.datum || "").localeCompare(b.datum || ""));
+    .sort(byDate);
   for (const i of list) {
     const y = yearOf(i);
     const benefit = baseOf(p, i).base * rateOf(p, i.kategorie);
@@ -171,14 +174,14 @@ export function calc(p, invoices, year, taxRatePct) {
   const breNet = bre - breTax;
   // Aufschlüsselung je Rechnung: Höchstbeträge, Satz, dann Selbstbehalt chronologisch
   let sbRemaining = sb;
-  const lines = [...regular].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
+  const lines = [...regular].sort(byDate).map(i => {
     const amount = num(i.betrag), r = rate(i), b = base(i), dentalCut = dCut(i), elig = b.base * r - dentalCut;
     const sbPart = sbApplies(i) ? Math.min(sbRemaining, elig) : 0;
     sbRemaining -= sbPart;
     const capCut = amount - b.base;
     return { inv: i, amount, rate: r, eligible: elig, capCut, rateCut: b.base - b.base * r, dentalCut, notCovered: amount - elig, sbPart, refund: elig - sbPart, sbFree: !sbApplies(i), pc: b.pc };
   });
-  const neutralLines = [...neutral].sort((a, b) => (a.datum || "").localeCompare(b.datum || "")).map(i => {
+  const neutralLines = [...neutral].sort(byDate).map(i => {
     const amount = num(i.betrag), r = rate(i), dentalCut = dCut(i), elig = amount * r - dentalCut;
     return { inv: i, amount, rate: r, eligible: elig, capCut: 0, rateCut: amount - amount * r, dentalCut, notCovered: amount - elig, sbPart: 0, refund: elig, neutral: true };
   });
@@ -191,6 +194,10 @@ export function calc(p, invoices, year, taxRatePct) {
   const capCut = lines.reduce((a, l) => a + l.capCut, 0);
   const dentalCut = lines.reduce((a, l) => a + l.dentalCut, 0);
   const regularTotal = lines.reduce((a, l) => a + l.amount, 0);
+  // Getrennt: Rechnungen ohne Selbstbehalt (z. B. Zahn bei Signal Iduna) und mit Selbstbehalt
+  const freeLines = lines.filter(l => l.sbFree), sbLines = lines.filter(l => !l.sbFree);
+  const payoutFree = freeLines.reduce((a, l) => a + l.refund, 0), payoutSb = sbLines.reduce((a, l) => a + l.refund, 0);
+  const totalFree = freeLines.reduce((a, l) => a + l.amount, 0), totalSb = sbLines.reduce((a, l) => a + l.amount, 0);
   const submitted = regular.filter(i => i.eingereicht);
   const unsubmitted = regular.filter(i => !i.eingereicht);
   const breLost = submitted.length > 0 && !p.offset;
@@ -209,7 +216,7 @@ export function calc(p, invoices, year, taxRatePct) {
   const threshold = eligible + rest;
   const submitWins = p.offset || breLost || payout > breNet;
   const best = breLost ? payout : Math.max(payout, breNet);
-  return { dental, dentalCut, lines, neutralLines, sbUsed, notCovered, capCut, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
+  return { freeLines, sbLines, payoutFree, payoutSb, totalFree, totalSb, dental, dentalCut, lines, neutralLines, sbUsed, notCovered, capCut, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
     rest, threshold, fy, verdict, tone, submitted, unsubmitted, breLost, submitWins, best };
 }
 

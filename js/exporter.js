@@ -30,11 +30,11 @@ export async function buildPackage({ person, year, invoices, getBlob }) {
   text("Einreichung von Arztrechnungen", 56, 20, bold); y -= 28;
   text(`${person.name} · ${person.insurer} ${person.tariff}`, 56, 12); y -= 18;
   text(`Behandlungsjahr ${year} · erstellt am ${fmtDate(new Date().toISOString().slice(0, 10))}`, 56, 11, font, rgb(0.35, 0.4, 0.47)); y -= 36;
-  text("Datum", 56, 10, bold); text("Leistungserbringer", 130, 10, bold); text("Betrag", 480, 10, bold); y -= 16;
+  text("Behandlung", 56, 10, bold); text("Leistungserbringer", 130, 10, bold); text("Betrag", 480, 10, bold); y -= 16;
   let sum = 0;
   for (const i of invoices) {
     if (y < 80) { page = doc.addPage(A4); y = 780; }
-    text(fmtDate(i.datum), 56, 10);
+    text(fmtDate(i.behandlung || i.datum), 56, 10);
     text(String(i.arzt || "").slice(0, 60), 130, 10);
     const amt = fmtEur(i.betrag);
     page.drawText(safe(amt), { x: 539 - font.widthOfTextAtSize(safe(amt), 10), y, size: 10, font });
