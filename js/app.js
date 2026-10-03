@@ -4,7 +4,7 @@ import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, PROVIDERS, AIError } from "./ai.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -658,6 +658,9 @@ function applyParsed(res, title) {
     if (v === undefined || v === null || v === "") continue;
     // Nichts überschreiben, was jemand selbst eingetragen hat
     if (draft.src[k] === "user") continue;
+    // Bei gespeicherten Rechnungen nur Lücken füllen (plus Kategorie/Positionen)
+    if (!draft.isNew && !["positions", "kategorie"].includes(k) && draft.inv[k] !== "" && draft.inv[k] != null) continue;
+    if (!draft.isNew && k === "kategorie" && !["logopaedie", "ergotherapie"].includes(v)) continue;
     draft.inv[k] = v; draft.src[k] = "ocr"; draft.sure[k] = !!res.sure[k];
     found++; if (res.sure[k]) sure++;
   }
@@ -669,6 +672,10 @@ function applyParsed(res, title) {
 
 async function runOcr() {
   if (!draft.pages.length) return;
+  // Gespeichertes PDF: eingebetteten Text erneut lesen
+  if (draft.pdfText.length <= 40 && draft.original?.id) {
+    try { const b = await store.getBlob(draft.original.id); if (b) draft.pdfText = (await readPdf(b, 6)).text || ""; } catch {}
+  }
   if (draft.pdfText.length > 40) { applyParsed(parseInvoice(draft.pdfText, S.persons), "PDF-Text gelesen"); return; }
   draft.status = { busy: true, title: "Texterkennung läuft …", text: "Beim ersten Mal werden die deutschen Sprachdaten geladen (einmalig, braucht Internet).", progress: 0 };
   viewEdit();
