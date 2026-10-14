@@ -1,10 +1,11 @@
 import * as store from "./store.js";
 import { CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, effDate, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck, isDental, isNeutral, dentalCapsOf, dentalLedger } from "./calc.js";
 import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
-import { aiRead, PROVIDERS, AIError } from "./ai.js";
+import { aiRead, aiReadStatement, PROVIDERS, AIError } from "./ai.js";
+import { parseStatement, matchItems, candidates } from "./statement.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.3.0";
+const APP_VERSION = "2.4.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -470,6 +471,7 @@ function viewHome() {
       </section>
       ${late.length ? `<div class="stack-s"><a class="notice bad" href="#/rechnungen" data-filter="unpaid"><span class="dot"></span><span>${late.length === 1 ? "1 Rechnung" : late.length + " Rechnungen"} über dem Zahlungsziel</span>${ic("chev", 18)}</a>
         <button class="btn sm self-start" type="button" id="paid-all" style="margin-left:4px">Alle als bezahlt markieren</button></div>` : ""}
+      ${pending.length ? `<a class="notice acc" href="#/abrechnung">${ic("file", 20)}<span>Abrechnung erhalten? Einlesen und ${pending.length === 1 ? "die Erstattung" : `${pending.length} Erstattungen`} übernehmen</span>${ic("chev", 18)}</a>` : ""}
       <section class="stack-s">
         <h2 class="sec-t">Familie</h2>
         ${results.length ? `<div class="card list">${results.map(x => personRow(x.p, x.r)).join("")}</div>` : `<div class="card empty">Noch keine Personen. <a href="#/einstellungen">In den Einstellungen anlegen</a>.</div>`}
@@ -539,6 +541,7 @@ function viewList() {
     <main class="main">
       <label class="search">${ic("search", 18)}<span class="sr">Suchen</span><input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}"></label>
       <div class="seg full" role="group" aria-label="Status">${seg("all", "Alle")}${seg("unpaid", "Zu zahlen", cnt.unpaid)}${seg("notsub", "Einreichen", cnt.notsub)}${seg("refund", "Erstattung", cnt.refund)}</div>
+      ${cnt.refund || ui.fStatus === "refund" ? `<a class="notice acc" href="#/abrechnung">${ic("file", 20)}<span>${cnt.refund ? `${cnt.refund} ${cnt.refund === 1 ? "Rechnung wartet" : "Rechnungen warten"} auf Erstattung – Abrechnung einlesen` : "Abrechnung der Versicherung einlesen"}</span>${ic("chev", 18)}</a>` : ""}
       ${S.persons.length > 1 ? `<div class="chips">${chip("all", "Alle")}${S.persons.map(p => chip(p.id, esc(p.name))).join("")}</div>` : ""}
       ${byMonth.length ? byMonth.map(g => `<div class="stack-s"><div class="month-h"><span>${g.k ? `${MONTHS_L[Number(g.k.slice(5, 7)) - 1]} ${g.k.slice(0, 4)}` : "Ohne Datum"}</span><span>${fmtEur(g.items.reduce((a, i) => a + Number(i.betrag || 0), 0))}</span></div>
         <div class="card list">${g.items.map(row).join("")}</div></div>`).join("")
@@ -727,6 +730,7 @@ function refundBox() {
       ${row("= voraussichtlich erstattet", fmtEur(l.refund + (lv?.refund || 0)), "sum")}
       ${real ? row("tatsächlich erstattet", fmtEur(i.erstattet), Math.abs(Number(i.erstattet) - l.refund) < 0.01 ? "extra" : "diff") : ""}
     </div>
+    ${real && i.bescheidId && (S.bescheide || []).some(b => b.id === i.bescheidId) ? `<a class="xs" href="#/abrechnung/${i.bescheidId}">Laut Abrechnung vom ${fmtDate(S.bescheide.find(b => b.id === i.bescheidId).datum)} ansehen</a>` : ""}
     ${real && Math.abs(Number(i.erstattet) - l.refund) >= 0.01 ? `<p class="xs muted">Abweichung ${fmtEur(Number(i.erstattet) - l.refund)} – prüfe den Leistungsbescheid oder die Erstattungssätze im Tarif.</p>` : ""}
     ${(() => { if (!isDental(i.kategorie) || !p) return ""; const d = dentalLedger(p, [...others, i], yearOf(i)); return d.active ? `<p class="xs ${l.dentalCut > 0.004 ? "bad-t" : "muted"}">${i.unfall ? "Unfallfolge: zählt nicht zum Zahn-Budget." : `Zahn-Budget ${p.name}: noch ${fmtEur(d.remaining)} von ${fmtEur(d.limit)} frei (inkl. dieser Rechnung).`}</p>` : ""; })()}
     ${lv || i.kategorie === "zahnprophylaxe" ? `<p class="xs muted">Zahn-Vorsorge (GOZ 0010, 1000–1040${p?.presetId === "signal-exklusiv1" ? ", 4005" : ""}, GOÄ 1) kostet keine Rückerstattung.${p?.presetId === "signal-exklusiv1" ? " Signal Iduna: mit dem „Vorblatt für Vorsorgeuntersuchungen“ einreichen, persönliche Leistungen höchstens zum 2,3-fachen Satz." : ""}${lv ? " Willst du die Rückerstattung behalten, bitte die Praxis, Vorsorge und Behandlung getrennt abzurechnen – dann kannst du die Vorsorge einreichen, ohne die Rückerstattung zu verlieren." : ""}</p>` : ""}
@@ -1240,12 +1244,242 @@ function viewPerson(id) {
   };
 }
 
+// ---------- Leistungsabrechnung der Versicherung ----------
+let stm = null;
+const hasVal = v => v !== null && v !== undefined && v !== "";
+const newStm = () => ({ pages: [], original: null, pdfText: "", status: null, read: false, datum: "", versicherer: "", total: null, items: [] });
+const invLabel = i => `${fmtEur(i.betrag)} · ${short(i.arzt || "Ohne Praxis")} · ${fmtShort(effDate(i))}${hasVal(i.erstattet) ? " · erstattet" : ""}`;
+const stmInvoices = () => [...S.invoices].sort((a, b) => (refundOpen(b) - refundOpen(a)) || effDate(b).localeCompare(effDate(a)));
+
+function viewStatement() {
+  const st = stm.status, hasPages = stm.pages.length > 0;
+  const prov = PROVIDERS[S.settings.ai.provider] || PROVIDERS.claude;
+  const inv = stmInvoices();
+  const used = stm.items.filter(x => x.use && x.invId);
+  const sumUsed = used.reduce((a, x) => a + (Number(x.erstattet) || 0), 0);
+  const dup = used.map(x => x.invId).filter((id, n, a) => a.indexOf(id) !== n);
+  const item = (it, n) => {
+    const cands = candidates(it, inv, S.persons);
+    const cur = it.invId ? S.invoices.find(i => i.id === it.invId) : null;
+    if (cur && !cands.includes(cur)) cands.unshift(cur);
+    return `<div class="card flist stm-it ${it.use && it.invId ? "" : "off"}">
+      <div class="pad-f stack-s" style="border-top:0">
+        <div class="split"><b>${esc(it.name || "Rechnung")}</b>${it.betrag ? `<span class="small muted num">${fmtEur(it.betrag)}</span>` : ""}</div>
+        <span class="xs muted">${[it.datum ? "Rechnung " + fmtDate(it.datum) : "", it.behandlung && it.behandlung !== it.datum ? "Behandlung " + fmtDate(it.behandlung) : "", it.patient].filter(Boolean).map(esc).join(" · ") || "Aus der Abrechnung"}</span>
+        ${it.hinweis ? `<span class="xs warn-t">${esc(it.hinweis)}</span>` : ""}
+      </div>
+      <label class="fr"><span>Rechnung</span><select data-sinv="${n}"><option value="">– nicht zuordnen –</option>${cands.map(i => `<option value="${i.id}" ${i.id === it.invId ? "selected" : ""}>${esc(invLabel(i))}</option>`).join("")}</select></label>
+      <label class="fr"><span>Erstattet (€)</span><input data-serst="${n}" type="number" inputmode="decimal" step="0.01" min="0" value="${hasVal(it.erstattet) ? Number(it.erstattet).toFixed(2) : ""}" placeholder="0,00"></label>
+      ${cur && hasVal(cur.erstattet) && !same2(cur.erstattet, it.erstattet) ? `<p class="xs warn-t pad-f">Bei dieser Rechnung sind schon ${fmtEur(cur.erstattet)} eingetragen – wird ersetzt.</p>` : ""}
+      ${cur && hasVal(it.betrag) && !same2(cur.betrag, it.betrag) ? `<p class="xs warn-t pad-f">Betrag weicht ab: Rechnung ${fmtEur(cur.betrag)}, Abrechnung ${fmtEur(it.betrag)}.</p>` : ""}
+      <label class="tg"><span>Übernehmen</span><input type="checkbox" class="sw" data-suse="${n}" ${it.use ? "checked" : ""} ${it.invId ? "" : "disabled"}></label>
+    </div>`;
+  };
+  page(`${header("Abrechnung einlesen", { back: "#/rechnungen", sub: "Leistungsabrechnung der Versicherung" })}
+    <main class="main">
+      <section class="${hasPages ? "card stack" : "stack"}">
+        ${hasPages ? `<div class="pages">${stm.pages.map((p, n) => `<figure class="pg"><img src="${p.url}" alt="Seite ${n + 1}"><figcaption><span class="xs">Seite ${n + 1}</span><button type="button" class="icon-btn sm" data-sdel="${n}" aria-label="Seite ${n + 1} entfernen">${ic("trash", 18)}</button></figcaption></figure>`).join("")}</div>`
+          : `<div class="capture-empty">${ic("file", 36)}<p>Lade die Abrechnung als PDF hoch oder fotografiere sie. Die App erkennt, was zu welcher Rechnung erstattet wurde.</p></div>`}
+        <div class="grid2">
+          <label class="btn ${hasPages ? "" : "primary"} file-btn">${ic("file", 20)} ${hasPages ? "Datei" : "PDF / Foto"}<input type="file" accept="application/pdf,image/*" multiple class="file-in" id="s-file"></label>
+          <label class="btn file-btn">${ic("cam", 20)} ${hasPages ? "Weitere Seite" : "Fotografieren"}<input type="file" accept="image/*" capture="environment" class="file-in" id="s-cam"></label>
+        </div>
+        ${hasPages ? `<div class="read-st">${st?.busy ? `<span class="spin" aria-hidden="true"></span>` : st?.error ? `<span class="st-i bad">${ic("alert", 18)}</span>` : st?.done ? `<span class="st-i ok">${ic("check", 18)}</span>` : `<span class="st-i">${ic("file", 18)}</span>`}
+            <div><strong>${esc(st?.title || "Abrechnung geladen")}</strong><span class="xs muted">${esc(st?.text || "Erstattungen auslesen lassen:")}</span></div></div>
+          ${st?.progress != null ? `<div class="prog"><div style="width:${Math.round(st.progress * 100)}%"></div></div>` : ""}
+          <div class="grid2">
+            <button type="button" class="btn sm" id="s-ocr" ${st?.busy ? "disabled" : ""}>${ic("file", 18)} Ohne KI lesen</button>
+            <button type="button" class="btn sm soft" id="s-ai" ${st?.busy ? "disabled" : ""}>${ic("spark", 18)} Mit KI lesen</button>
+          </div>
+          <p class="xs muted">Abrechnungen sind oft Tabellen – mit KI (${esc(prov.label)}) klappt es meist zuverlässiger. Gesendet wird nur die Abrechnung, deine Rechnungsliste bleibt auf dem Gerät.</p>` : ""}
+      </section>
+      ${stm.read ? `
+        <section class="card flist">
+          <label class="fr"><span>Datum der Abrechnung</span><input id="s-datum" type="date" value="${esc(stm.datum || "")}"></label>
+          ${stm.versicherer ? `<div class="fr"><span>Versicherung</span><b>${esc(stm.versicherer)}</b></div>` : ""}
+          ${hasVal(stm.total) ? `<div class="fr"><span>Auszahlung laut Abrechnung</span><b class="num">${fmtEur(stm.total)}</b></div>` : ""}
+          <div class="fr"><span>Davon zugeordnet</span><b class="num ${hasVal(stm.total) && !same2(stm.total, sumUsed) ? "warn-t" : "good-t"}">${fmtEur(sumUsed)}</b></div>
+        </section>
+        ${hasVal(stm.total) && used.length && !same2(stm.total, sumUsed) ? `<p class="xs muted" style="margin:0 6px">Die Summe weicht von der Auszahlung ab (${fmtEur(stm.total - sumUsed)}). Fehlt eine Rechnung oder ist ein Betrag falsch erkannt?</p>` : ""}
+        <h2 class="sec-t">Erkannte Rechnungen (${stm.items.length})</h2>
+        ${stm.items.length ? stm.items.map(item).join("") : `<div class="card empty small">Keine Rechnungen erkannt. Versuch es mit KI oder füge sie selbst hinzu.</div>`}
+        <button type="button" class="btn" id="s-add">${ic("plus", 18)} Rechnung hinzufügen</button>
+        <p class="form-err" id="s-err" role="alert">${dup.length ? "Eine Rechnung ist mehrfach zugeordnet." : ""}</p>
+        <button type="button" class="btn primary big" id="s-apply" ${used.length && !dup.length ? "" : "disabled"}>${used.length ? `${used.length} ${used.length === 1 ? "Erstattung" : "Erstattungen"} übernehmen` : "Nichts zum Übernehmen"}</button>
+        <p class="xs muted" style="margin:0 6px;text-align:center">Die Rechnungen werden als eingereicht und erstattet markiert. Die Abrechnung wird verschlüsselt auf dem Gerät gespeichert.</p>` : ""}
+    </main>`);
+
+  const onFiles = e => stmAddFiles(e.target.files);
+  $("#s-file").onchange = onFiles; $("#s-cam").onchange = onFiles;
+  $$("[data-sdel]").forEach(b => b.onclick = () => { stm.pages.splice(Number(b.dataset.sdel), 1); if (!stm.pages.length) Object.assign(stm, newStm()); else stm.original = null; viewStatement(); });
+  $("#s-ocr")?.addEventListener("click", stmOcr);
+  $("#s-ai")?.addEventListener("click", stmAi);
+  $("#s-datum")?.addEventListener("change", e => { stm.datum = e.target.value; });
+  $$("[data-sinv]").forEach(s => s.onchange = () => { const it = stm.items[Number(s.dataset.sinv)]; it.invId = s.value; it.use = !!s.value; viewStatement(); });
+  $$("[data-serst]").forEach(s => s.onchange = () => { const it = stm.items[Number(s.dataset.serst)]; it.erstattet = s.value === "" ? null : Number(s.value); viewStatement(); });
+  $$("[data-suse]").forEach(s => s.onchange = () => { stm.items[Number(s.dataset.suse)].use = s.checked; viewStatement(); });
+  $("#s-add")?.addEventListener("click", () => { stm.items.push({ name: "Weitere Rechnung", betrag: null, erstattet: null, invId: "", use: false }); viewStatement(); });
+  $("#s-apply")?.addEventListener("click", stmApply);
+}
+const same2 = (a, b) => Math.abs(Number(a) - Number(b)) < 0.006;
+
+async function stmAddFiles(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
+  for (const f of list) {
+    const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+    try {
+      if (isPdf) {
+        stm.status = { busy: true, title: "PDF wird geöffnet …", text: "" }; viewStatement();
+        const before = stm.pages.length;
+        const r = await readPdf(f, 8);
+        for (const b of r.pages) stm.pages.push({ blob: b, url: URL.createObjectURL(b) });
+        if (!before && list.length === 1) stm.original = { blob: f, type: "application/pdf" };
+        stm.pdfText = (stm.pdfText + "\n" + r.text).trim();
+      } else {
+        const b = await normalizeImage(f);
+        stm.pages.push({ blob: b, url: URL.createObjectURL(b) });
+        stm.original = null;
+      }
+    } catch (e) {
+      console.error(e);
+      stm.status = { error: true, title: isPdf ? "PDF konnte nicht geöffnet werden" : "Bild konnte nicht geöffnet werden", text: isPdf ? "Ist das PDF passwortgeschützt? Mach sonst ein Foto." : "Mach sonst einen Screenshot." };
+      viewStatement(); return;
+    }
+  }
+  stm.status = null;
+  stmOcr();
+}
+
+function stmApplyRead(res, title) {
+  stm.read = true;
+  stm.datum = res.datum || stm.datum || today();
+  if (res.versicherer) stm.versicherer = res.versicherer;
+  stm.total = hasVal(res.total) ? res.total : null;
+  stm.items = matchItems(res.items, stmInvoices(), S.persons);
+  const n = stm.items.filter(x => x.invId).length;
+  stm.status = { done: true, title, text: stm.items.length ? `${stm.items.length} ${stm.items.length === 1 ? "Rechnung" : "Rechnungen"} erkannt, ${n} zugeordnet. Bitte unten prüfen.` : "Keine Rechnungen erkannt." };
+  viewStatement();
+}
+
+async function stmOcr() {
+  if (!stm.pages.length) return;
+  if (stm.pdfText.length > 40) { stmApplyRead(parseStatement(stm.pdfText, stmInvoices()), "PDF-Text gelesen"); return; }
+  stm.status = { busy: true, title: "Texterkennung läuft …", text: "Das kann bei mehreren Seiten etwas dauern.", progress: 0 };
+  viewStatement();
+  try {
+    const text = await ocrImages(stm.pages.map(p => p.blob), m => {
+      if (!stm?.status?.busy) return;
+      const label = /recogniz/i.test(m.status) ? "Text wird erkannt …" : /load/i.test(m.status) ? "Texterkennung wird geladen …" : m.status;
+      const t = $(".read-st strong"); if (t) t.textContent = label;
+      const pr = $(".prog > div"); if (pr) pr.style.width = Math.round((m.progress || 0) * 100) + "%";
+    });
+    stm.ocrText = text;
+    stmApplyRead(parseStatement(text, stmInvoices()), "Auf dem Gerät gelesen");
+  } catch (e) {
+    console.error(e);
+    stm.status = { error: true, title: "Texterkennung nicht verfügbar", text: "Versuch es mit KI oder später noch einmal." };
+    viewStatement();
+  }
+}
+
+async function stmAi() {
+  const ai = S.settings.ai;
+  const prov = PROVIDERS[ai.provider] || PROVIDERS.claude;
+  if (!ai.apiKey) {
+    const go = await modal({ title: "API-Schlüssel fehlt", body: `<p>Für das Auslesen mit ${esc(prov.label)} brauchst du einen eigenen Schlüssel. Trag ihn in den Einstellungen ein.</p>`, actions: [{ label: "Abbrechen", value: false }, { label: "Zu den Einstellungen", value: true, primary: true }] });
+    if (go) location.hash = "#/einstellungen";
+    return;
+  }
+  if (ai.askBefore) {
+    const r = await modal({
+      title: `An ${prov.label} senden?`,
+      body: `<p>Die Abrechnung (bis zu 4 Seiten${stm.pdfText ? " und ihr Text" : ""}) wird zum Auslesen an ${esc(prov.label)} geschickt. Deine Rechnungsliste bleibt auf dem Gerät.</p><label class="tg plain"><span>Nicht mehr fragen</span><input type="checkbox" class="sw" id="m-noask"></label>`,
+      actions: [{ label: "Abbrechen", value: null }, { label: "Senden", primary: true, collect: w => ({ noask: $("#m-noask", w).checked }) }],
+    });
+    if (!r) return;
+    if (r.noask) { ai.askBefore = false; await save(); }
+  }
+  stm.status = { busy: true, title: `${prov.label} liest die Abrechnung …`, text: "Das dauert meist 10–20 Sekunden." };
+  viewStatement();
+  try {
+    const res = await aiReadStatement(ai, stm.pages.map(p => p.blob), S.persons, stm.pdfText);
+    stmApplyRead(res, `Mit ${prov.label} gelesen`);
+  } catch (e) {
+    console.error(e);
+    stm.status = { error: true, title: "KI-Auslesen fehlgeschlagen", text: e instanceof AIError ? e.message : "Unbekannter Fehler. Prüfe die Internetverbindung." };
+    viewStatement();
+  }
+}
+
+async function stmApply() {
+  const used = stm.items.filter(x => x.use && x.invId);
+  if (used.some(x => !hasVal(x.erstattet))) { $("#s-err").textContent = "Bitte bei jeder übernommenen Rechnung den erstatteten Betrag angeben."; return; }
+  const btn = $("#s-apply"); btn.disabled = true; btn.textContent = "Wird verschlüsselt gespeichert …";
+  try {
+    const id = uid("bs-");
+    const pages = [];
+    for (const p of stm.pages) { const pid = uid("pg-"); await store.putBlob(pid, p.blob); pages.push({ id: pid, type: p.blob.type || "image/jpeg" }); }
+    let original = null;
+    if (stm.original?.blob) { const oid = uid("orig-"); await store.putBlob(oid, stm.original.blob); original = { id: oid, type: "application/pdf" }; }
+    const datum = stm.datum || today();
+    for (const x of used) {
+      const i = S.invoices.find(v => v.id === x.invId); if (!i) continue;
+      i.erstattet = Math.round(Number(x.erstattet) * 100) / 100;
+      i.erstattetAm = datum; i.bescheidId = id;
+      if (!i.eingereicht) { i.eingereicht = true; i.eingereichtAm = i.eingereichtAm || ""; }
+    }
+    (S.bescheide ||= []).push({ id, datum, versicherer: stm.versicherer || "", total: stm.total, pages, original, createdAt: new Date().toISOString(),
+      items: used.map(x => ({ invId: x.invId, erstattet: Number(x.erstattet), betrag: x.betrag, name: x.name || "", hinweis: x.hinweis || "" })) });
+    await save();
+    const n = used.length; stm = null;
+    toast(`${n} ${n === 1 ? "Erstattung" : "Erstattungen"} übernommen`);
+    location.hash = `#/abrechnung/${id}`;
+  } catch (ex) {
+    console.error(ex);
+    $("#s-err").textContent = ex?.name === "QuotaExceededError" ? "Der Speicher des Handys ist voll." : "Speichern fehlgeschlagen. Bitte noch einmal versuchen.";
+    btn.disabled = false; btn.textContent = "Erneut versuchen";
+  }
+}
+
+async function viewStatementSaved(id) {
+  const b = (S.bescheide || []).find(x => x.id === id);
+  if (!b) { location.hash = "#/rechnungen"; return; }
+  const rows = b.items.map(x => { const i = S.invoices.find(v => v.id === x.invId); const p = i ? person(i.personId) : null;
+    return `<a class="row" href="${i ? `#/rechnung/${i.id}` : "#/rechnungen"}"><span class="row-t"><b>${esc(i?.arzt || x.name || "Gelöschte Rechnung")}</b><span class="xs muted">${i ? `${dShort(effDate(i))} · ${esc(p?.name || "")} · Rechnung ${fmtEur(i.betrag)}` : ""}</span>${x.hinweis ? `<span class="xs warn-t">${esc(x.hinweis)}</span>` : ""}</span><span class="row-v"><b class="good-t">${fmtEur(x.erstattet)}</b></span></a>`; }).join("");
+  const sum = b.items.reduce((a, x) => a + x.erstattet, 0);
+  page(`${header("Abrechnung", { back: "#/rechnungen", sub: `vom ${fmtDate(b.datum)}${b.versicherer ? " · " + b.versicherer : ""}` })}
+    <main class="main">
+      <section class="inv-hero"><span class="small muted">Erstattet</span><span class="amt">${fmtEur(sum)}</span>${hasVal(b.total) && !same2(b.total, sum) ? `<span class="pill-st warn">Auszahlung laut Abrechnung ${fmtEur(b.total)}</span>` : ""}</section>
+      <div class="card list">${rows}</div>
+      <section class="card stack"><div class="pages" id="b-pages">${b.pages.map(p => `<figure class="pg" data-thumb="${p.id}"></figure>`).join("")}</div>
+        ${b.original || b.pages.length ? `<button type="button" class="btn sm" id="b-share">${ic("up", 18)} Abrechnung teilen</button>` : ""}</section>
+      <button type="button" class="btn text-danger" id="b-del">Abrechnung löschen</button>
+      <p class="xs muted" style="text-align:center;margin:0 6px">Beim Löschen bleiben die erstatteten Beträge an den Rechnungen stehen.</p>
+    </main>`, "list");
+  loadThumbs();
+  $("#b-share")?.addEventListener("click", async () => {
+    const src = b.original || b.pages[0]; const blob = await store.getBlob(src.id); if (!blob) return;
+    const name = `Abrechnung-${b.datum}.${b.original ? "pdf" : "jpg"}`;
+    await shareOrSave(new Blob([blob], { type: src.type }), name, "Leistungsabrechnung");
+  });
+  $("#b-del").onclick = async () => {
+    if (!(await confirmBox("Abrechnung löschen?", "Das Dokument wird vom Gerät gelöscht. Die erstatteten Beträge an den Rechnungen bleiben.", "Löschen", true))) return;
+    for (const p of b.pages) await store.deleteBlob(p.id);
+    if (b.original) await store.deleteBlob(b.original.id);
+    S.bescheide = S.bescheide.filter(x => x.id !== id);
+    for (const i of S.invoices) if (i.bescheidId === id) delete i.bescheidId;
+    await save(); toast("Abrechnung gelöscht"); location.hash = "#/rechnungen";
+  };
+}
+
 // ---------- Router ----------
 async function route() {
   if (!store.isUnlocked() || !S) { (await store.isSetUp()) ? showLock() : setupWelcome(); return; }
   if (!S.persons.length && !S.invoices.length && location.hash !== "#/einstellungen") { setupPeople(); return; }
   const h = location.hash.replace(/^#/, "") || "/";
   const parts = h.split("/").filter(Boolean);
+  if (parts[0] !== "abrechnung") stm = null;
   if (parts[0] !== "neu" && parts[0] !== "rechnung" && !(parts[0] === "einstellungen" && draft && sessionStorage.getItem("returnTo"))) draft = null;
   switch (parts[0]) {
     case undefined: return viewHome();
@@ -1257,6 +1491,9 @@ async function route() {
       if (!draft || draft.inv.id !== inv.id) draft = await draftFromInvoice(inv);
       return viewEdit();
     }
+    case "abrechnung":
+      if (parts[1]) return viewStatementSaved(parts[1]);
+      if (!stm) stm = newStm(); return viewStatement();
     case "paket": return viewPackage(parts[1], Number(parts[2]) || ui.year);
     case "jahr": return viewPersonYear(parts[1], Number(parts[2]) || ui.year);
     case "fristen": return viewDeadlines();

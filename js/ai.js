@@ -40,7 +40,7 @@ function httpError(status, body) {
   return new AIError("other", `Fehler ${status} vom KI-Dienst.`);
 }
 
-async function callGemini(key, model, images, text) {
+async function callGemini(key, model, images, text, maxTokens) {
   const parts = [{ text }];
   for (const img of images) parts.push({ inline_data: { mime_type: "image/jpeg", data: await blobToB64(img) } });
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
@@ -55,14 +55,14 @@ async function callGemini(key, model, images, text) {
   return parseJson(out);
 }
 
-async function callClaude(key, model, images, text) {
+async function callClaude(key, model, images, text, maxTokens = 600) {
   const content = [];
   for (const img of images) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: await blobToB64(img) } });
   content.push({ type: "text", text });
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-    body: JSON.stringify({ model, max_tokens: 600, messages: [{ role: "user", content }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: "user", content }] }),
   });
   const body = await r.text();
   if (!r.ok) throw httpError(r.status, body);
@@ -70,18 +70,16 @@ async function callClaude(key, model, images, text) {
   return parseJson((j.content || []).map(c => c.text || "").join(""));
 }
 
-export async function aiRead({ provider, apiKey, model }, images, persons, pdfText = "") {
+async function run({ provider, apiKey, model }, images, text, maxImages, maxTokens) {
   if (!apiKey) throw new AIError("nokey", "Trag zuerst in den Einstellungen einen API-Schlüssel ein.");
   if (!navigator.onLine) throw new AIError("offline", "Du bist offline. Das KI-Auslesen braucht eine Internetverbindung.");
   const P = PROVIDERS[provider] || PROVIDERS.claude;
-  const text = prompt(persons, pdfText);
-  const imgs = images.slice(0, 3);
+  const imgs = images.slice(0, maxImages);
   const models = [model, ...P.models].filter((m, i, a) => m && a.indexOf(m) === i);
   let last;
   for (const m of models) {
     try {
-      const r = provider === "claude" ? await callClaude(apiKey, m, imgs, text) : await callGemini(apiKey, m, imgs, text);
-      return normalize(r, persons);
+      return provider === "claude" ? await callClaude(apiKey, m, imgs, text, maxTokens) : await callGemini(apiKey, m, imgs, text, maxTokens);
     } catch (e) {
       last = e;
       if (!(e instanceof AIError && e.code === "model")) break;
@@ -89,6 +87,34 @@ export async function aiRead({ provider, apiKey, model }, images, persons, pdfTe
   }
   if (last instanceof AIError) throw last;
   throw new AIError("network", "Keine Verbindung zum KI-Dienst.");
+}
+
+export async function aiRead(ai, images, persons, pdfText = "") {
+  return normalize(await run(ai, images, prompt(persons, pdfText), 3, 600), persons);
+}
+
+// ---------- Leistungsabrechnung der Versicherung ----------
+function statementPrompt(persons, pdfText) {
+  const names = persons.map(p => p.name).filter(Boolean).join(", ") || "–";
+  return `Du liest eine deutsche Leistungsabrechnung (Erstattungsbescheid) einer privaten Krankenversicherung.
+Versicherte Personen im Haushalt: ${names}.
+${pdfText ? `Eingebetteter Text der Abrechnung:\n"""\n${pdfText.slice(0, 20000)}\n"""\n` : ""}
+Antworte ausschließlich mit einem JSON-Objekt:
+{"datum":"YYYY-MM-DD","versicherer":"Name","auszahlung":123.45,"selbstbehalt":0,"rechnungen":[{"rechnungsdatum":"YYYY-MM-DD","behandlung":"YYYY-MM-DD","leistungserbringer":"Praxis oder Name","patient":"Vorname","rechnungsbetrag":123.45,"erstattet":100.00,"hinweis":"kurz"}]}
+Regeln: datum = Datum der Abrechnung. auszahlung = insgesamt überwiesener Betrag. selbstbehalt = in dieser Abrechnung abgezogener Selbstbehalt gesamt, sonst 0.
+rechnungen = je eingereichter Rechnung genau ein Eintrag (nicht je Gebührenziffer): rechnungsbetrag = Betrag der Rechnung, erstattet = für diese Rechnung tatsächlich erstatteter Betrag NACH Abzug von Selbstbehalt und Kürzungen (auch 0). Wird der Selbstbehalt nur gesamt abgezogen, verteile ihn auf die Rechnungen in der Reihenfolge der Abrechnung. hinweis = Grund einer Kürzung in höchstens 8 Wörtern, sonst null. patient = möglichst einer der Haushaltsnamen. Unlesbare Felder = null. Beträge als Zahl in Euro.`;
+}
+
+export async function aiReadStatement(ai, images, persons, pdfText = "") {
+  const r = await run(ai, images, statementPrompt(persons, pdfText), 4, 2500);
+  const iso = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? v : null;
+  const num = v => { if (v === null || v === undefined || v === "") return null; const n = typeof v === "string" ? Number(v.replace(/\./g, "").replace(",", ".")) : Number(v); return Number.isFinite(n) ? Math.round(n * 100) / 100 : null; };
+  const items = (Array.isArray(r.rechnungen) ? r.rechnungen : []).map(x => ({
+    datum: iso(x.rechnungsdatum), behandlung: iso(x.behandlung), name: String(x.leistungserbringer || "").slice(0, 80),
+    patient: x.patient ? String(x.patient).slice(0, 40) : "", betrag: num(x.rechnungsbetrag), erstattet: num(x.erstattet),
+    hinweis: x.hinweis ? String(x.hinweis).slice(0, 120) : "", sure: false,
+  })).filter(x => x.betrag || x.erstattet !== null);
+  return { datum: iso(r.datum), versicherer: r.versicherer ? String(r.versicherer).slice(0, 60) : "", total: num(r.auszahlung), selbstbehalt: num(r.selbstbehalt), items };
 }
 
 function normalize(r, persons) {
