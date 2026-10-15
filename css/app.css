@@ -375,3 +375,4 @@ details .field { margin-top: 10px; }
 .mtable th:first-child, .mtable td:first-child { text-align: left; }
 .mtable th { font-weight: 500; color: var(--muted); }
 .nw { white-space: nowrap; }
+.self-center { align-self: center; }

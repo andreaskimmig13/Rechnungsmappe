@@ -5,7 +5,7 @@ import { aiRead, aiReadStatement, PROVIDERS, AIError } from "./ai.js";
 import { parseStatement, matchItems, candidates } from "./statement.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.5.0";
+const APP_VERSION = "2.5.1";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -65,6 +65,7 @@ let draft = null;      // Rechnung in Bearbeitung
 let ui = { fPerson: "all", fStatus: "all", q: "", year: new Date().getFullYear() };
 let hiddenAt = 0;
 let installEvt = null;
+let swReg = null;
 let picking = 0;       // Zeitpunkt, an dem Kamera/Dateiauswahl geöffnet wurde
 
 const defaultState = () => ({
@@ -1127,6 +1128,7 @@ async function viewSettings() {
       <section class="stack-s"><h3 class="sec">Gefahrenzone</h3>
         <div class="card stack"><p class="small">Löscht alle Rechnungen, Fotos und Einstellungen von diesem Gerät. Ein Backup bleibt davon unberührt.</p><button type="button" class="btn danger-line" id="wipe">Alle Daten löschen</button></div>
       </section>
+      <button type="button" class="btn sm self-center" id="upd">${ic("rot", 18)} Nach Update suchen</button>
       <p class="foot">Rechnungsmappe ${APP_VERSION} · Schrift Instrument Sans (SIL Open Font License) · PDF-Werkzeuge: pdf.js (Apache 2.0), pdf-lib (MIT) · Texterkennung: Tesseract.js (Apache 2.0)</p>
     </main>`, "set");
 
@@ -1143,6 +1145,17 @@ async function viewSettings() {
   $$("[data-theme-set]").forEach(b => b.onclick = () => { setTheme(b.dataset.themeSet); $$("[data-theme-set]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); });
   $("#add-p").onclick = async () => { const p = personFromPreset("custom", "child", { name: "Neue Person" }); S.persons.push(p); await save(); location.hash = `#/person/${p.id}`; };
   $("#bk-make").onclick = makeBackupFlow;
+  $("#upd").onclick = async () => {
+    const b = $("#upd"); b.disabled = true; b.textContent = "Suche …";
+    try {
+      if (!swReg) throw 0;
+      await swReg.update();
+      const w = swReg.installing || swReg.waiting;
+      if (w) { b.textContent = "Update wird geladen …"; setTimeout(() => location.reload(), 4000); return; }
+      toast(`Du hast die neueste Version (${APP_VERSION}).`);
+    } catch { toast(navigator.onLine ? "Update-Prüfung nicht möglich." : "Du bist offline."); }
+    b.disabled = false; b.innerHTML = `${ic("rot", 18)} Nach Update suchen`;
+  };
   $("#bk-load").onchange = e => importFile(e.target.files[0], { replace: false });
   $("#pin-ch").onclick = changePinFlow;
   $("#wipe").onclick = async () => {
@@ -1586,11 +1599,18 @@ async function start() {
 }
 
 if ("serviceWorker" in navigator && location.protocol === "https:") {
-  navigator.serviceWorker.register("./sw.js").then(reg => {
-    reg.addEventListener("updatefound", () => {
-      const w = reg.installing;
-      w?.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) toast("Neue Version geladen – wird beim nächsten Öffnen aktiv."); });
-    });
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  // Neue Version übernommen: neu laden, außer es wird gerade etwas erfasst
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloading) return;
+    if (draft || stm?.pages?.length) { toast("Neue Version geladen – wird beim nächsten Öffnen aktiv."); return; }
+    reloading = true; location.reload();
+  });
+  navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then(reg => {
+    swReg = reg;
+    reg.update().catch(() => {});
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) reg.update().catch(() => {}); });
   }).catch(() => {});
 }
 
