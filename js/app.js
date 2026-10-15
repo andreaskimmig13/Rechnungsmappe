@@ -5,7 +5,7 @@ import { aiRead, aiReadStatement, PROVIDERS, AIError } from "./ai.js";
 import { parseStatement, matchItems, candidates } from "./statement.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.4.0";
+const APP_VERSION = "2.5.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -434,20 +434,77 @@ function greeting() {
   return `${h < 11 ? "Guten Morgen" : h < 18 ? "Guten Tag" : "Guten Abend"}${first ? ", " + esc(first) : ""}`;
 }
 
+const isRefunded = i => i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "";
+const stageOf = i => isRefunded(i) ? "done" : i.eingereicht ? "wait" : "open";
+const STAGES = [
+  { k: "done", l: "Erstattet", fs: "done" },
+  { k: "wait", l: "Eingereicht, Erstattung offen", fs: "refund" },
+  { k: "open", l: "Nicht eingereicht", fs: "notsub" },
+];
+
+function statusCard(inv, exp, y) {
+  const g = Object.fromEntries(STAGES.map(s => [s.k, { n: 0, sum: 0, exp: 0, got: 0 }]));
+  for (const i of inv) {
+    const x = g[stageOf(i)]; x.n++; x.sum += Number(i.betrag) || 0;
+    x.exp += (exp[i.id]?.refund || 0) + (exp[i.id + "#v"]?.refund || 0);
+    if (isRefunded(i)) x.got += Number(i.erstattet) || 0;
+  }
+  const total = inv.reduce((a, i) => a + (Number(i.betrag) || 0), 0);
+  if (!inv.length) return "";
+  const sub = { done: x => `${fmtEur(x.got)} erhalten`, wait: x => x.exp > 0.004 ? `erwartet ca. ${fmtEur(x.exp)}` : "im Selbstbehalt – keine Erstattung erwartet", open: x => x.exp > 0.004 ? `bei Einreichung ca. ${fmtEur(x.exp)}` : "" };
+  return `<section class="card stack" aria-labelledby="st-h">
+    <div class="split"><h2 class="h3" id="st-h">Stand Einreichung ${y}</h2><span class="small muted">${fmtEur(total)}</span></div>
+    <div class="stbar" role="img" aria-label="${STAGES.map(s => `${s.l}: ${fmtEur(g[s.k].sum)}`).join(", ")}">${STAGES.filter(s => g[s.k].sum > 0.004).map(s => `<span class="seg-${s.k}" style="flex:${g[s.k].sum}"></span>`).join("")}</div>
+    <div class="list st-list">${STAGES.map(s => { const x = g[s.k]; return `<a class="row" href="#/rechnungen" data-gofs="${s.fs}">
+      <span class="lg lg-${s.k}" aria-hidden="true"></span>
+      <span class="row-t"><b>${s.l}</b><span class="xs muted">${x.n} ${x.n === 1 ? "Rechnung" : "Rechnungen"}${x.n && sub[s.k](x) ? " · " + sub[s.k](x) : ""}</span></span>
+      <span class="row-v"><b class="num">${fmtEur(x.sum)}</b><span class="xs muted">${total ? Math.round(x.sum / total * 100) : 0} %</span></span></a>`; }).join("")}</div>
+    ${g.done.n && g.done.exp > 0.004 && Math.abs(g.done.got - g.done.exp) >= 0.01 ? `<p class="xs muted">Bei den erstatteten Rechnungen hatte die App ${fmtEur(g.done.exp)} erwartet – ${g.done.got > g.done.exp ? "du hast " + fmtEur(g.done.got - g.done.exp) + " mehr bekommen" : fmtEur(g.done.exp - g.done.got) + " weniger erhalten. Prüfe die Abrechnung"}.</p>` : ""}
+  </section>`;
+}
+
+function monthChart(inv, y) {
+  const months = Array.from({ length: 12 }, () => ({ done: 0, wait: 0, open: 0, got: 0, n: 0 }));
+  for (const i of inv) { const m = Number(effDate(i).slice(5, 7)) - 1; if (!(m >= 0)) continue; const x = months[m]; x[stageOf(i)] += Number(i.betrag) || 0; x.n++; if (isRefunded(i)) x.got += Number(i.erstattet) || 0; }
+  const tot = months.map(x => x.done + x.wait + x.open);
+  const mMax = Math.max(...tot, 1), yearSum = tot.reduce((a, b) => a + b, 0);
+  const curM = new Date().getFullYear() === y ? new Date().getMonth() : (y < new Date().getFullYear() ? 11 : -1);
+  const top = tot.indexOf(Math.max(...tot));
+  const H = 96;
+  const bars = months.map((x, m) => {
+    const t = tot[m];
+    const label = `${MONTHS_L[m]}: ${fmtEur(t)}${t ? ` – erstattet ${fmtEur(x.done)}, eingereicht ${fmtEur(x.wait)}, nicht eingereicht ${fmtEur(x.open)}` : ""}`;
+    if (!t) return `<button type="button" class="mbar empty ${m > curM ? "future" : ""}" data-m="${m}" aria-label="${esc(label)}"><span class="mstack" style="height:4px"><span class="seg-none"></span></span></button>`;
+    const h = Math.max(8, t / mMax * H);
+    return `<button type="button" class="mbar" data-m="${m}" aria-label="${esc(label)}">${m === top ? `<span class="mtop">${fmtEur0(t)}</span>` : ""}<span class="mstack" style="height:${h}px">${["open", "wait", "done"].filter(k => x[k] > 0.004).map(k => `<span class="seg-${k}" style="flex:${x[k]}"></span>`).join("")}</span></button>`;
+  }).join("");
+  return { html: `<section class="card stack">
+      <div class="split"><h2 class="h3">Arztkosten nach Status</h2><span class="small muted">${fmtEur(yearSum)} gesamt</span></div>
+      <div class="legend">${STAGES.map(s => `<span><i class="lg lg-${s.k}"></i>${s.k === "wait" ? "Eingereicht" : s.l}</span>`).join("")}</div>
+      <div class="mbars">${bars}</div>
+      <div class="bars-x">${"JFMAMJJASOND".split("").map((c, m) => `<span class="${tot[m] ? "on" : ""}">${c}</span>`).join("")}</div>
+      <p class="mdetail small" id="mdetail" aria-live="polite">Tippe auf einen Monat für Details.</p>
+      <details class="xs"><summary>Als Tabelle</summary><table class="mtable"><thead><tr><th>Monat</th><th>Erstattet</th><th>Eingereicht</th><th>Offen</th></tr></thead><tbody>${months.map((x, m) => tot[m] ? `<tr><td>${MONTHS[m]}</td><td>${fmtEur(x.done)}</td><td>${fmtEur(x.wait)}</td><td>${fmtEur(x.open)}</td></tr>` : "").join("")}</tbody></table></details>
+    </section>`, months, tot };
+}
+
 function viewHome() {
   const y = ui.year;
-  const yearInv = S.invoices.filter(i => yearOf(i) === y);
-  const unpaid = S.invoices.filter(i => !i.bezahlt);
+  const fp = ui.fPerson !== "all" && person(ui.fPerson) ? ui.fPerson : "all";
+  const mine = i => fp === "all" || i.personId === fp;
+  const persons = fp === "all" ? S.persons : S.persons.filter(p => p.id === fp);
+  const yearInv = S.invoices.filter(i => yearOf(i) === y && mine(i));
+  const unpaid = S.invoices.filter(i => !i.bezahlt && mine(i));
   const late = unpaid.filter(i => i.faellig && i.faellig < today());
-  const pending = S.invoices.filter(refundOpen);
-  const results = S.persons.map(p => ({ p, r: calc(p, S.invoices, y, S.settings.taxRate) }));
+  const pending = S.invoices.filter(i => refundOpen(i) && mine(i));
+  const results = persons.map(p => ({ p, r: calc(p, S.invoices, y, S.settings.taxRate) }));
+  const exp = expectedFor();
+  const chart = monthChart(yearInv, y);
   const back = results.reduce((a, x) => a + choiceOf(x.p, x.r).amount, 0);
   const payoutSum = results.reduce((a, x) => a + x.r.payout + x.r.neutralRefund, 0);
   const sbSum = results.reduce((a, x) => a + x.r.sbUsed, 0);
-  const months = Array.from({ length: 12 }, (_, m) => yearInv.filter(i => Number(effDate(i).slice(5, 7)) === m + 1).reduce((a, i) => a + Number(i.betrag || 0), 0));
-  const mMax = Math.max(...months, 1);
-  const yearSum = months.reduce((a, b) => a + b, 0);
-  const curM = new Date().getFullYear() === y ? new Date().getMonth() : (y < new Date().getFullYear() ? 11 : -1);
+  const yearSum = chart.tot.reduce((a, b) => a + b, 0);
+  const chip = (val, label) => `<button type="button" class="chip" data-fp="${val}" aria-pressed="${fp === val}">${label}</button>`;
   const dl = deadlines(S.persons, S.invoices).filter(d => !d.overdue).slice(0, 3);
   const standalone = matchMedia("(display-mode: standalone)").matches;
   const groups = {};
@@ -457,9 +514,10 @@ function viewHome() {
 
   page(`<header class="top"><div class="top-t"><span class="sub">${greeting()}</span><h1>Übersicht</h1></div>${yearSeg()}</header>
     <main class="main">
+      ${S.persons.length > 1 ? `<div class="chips" role="group" aria-label="Person">${chip("all", "Alle")}${S.persons.map(p => chip(p.id, esc(p.name))).join("")}</div>` : ""}
       ${installEvt && !standalone ? `<section class="card install"><div><strong>Als App installieren</strong><span class="small muted">Eigenes Symbol, Vollbild, offline nutzbar.</span></div><button class="btn primary sm" type="button" id="install">Installieren</button></section>` : ""}
       <section class="card hero">
-        <span class="sub">Rückfluss ${y} bei bester Wahl</span>
+        <span class="sub">Rückfluss ${y} bei bester Wahl${fp !== "all" ? " · " + esc(persons[0].name) : ""}</span>
         <span class="hero-n">${fmtEur0(back)}</span>
         <span class="xs muted">nach Steuer${how ? " · " + esc(how) : ""}</span>
         <div class="hero-grid">
@@ -469,17 +527,14 @@ function viewHome() {
           <div><span class="sub">Erstattung ausstehend</span><b>${pending.length}</b><span class="xs muted">${pending.length === 1 ? "Rechnung" : "Rechnungen"} eingereicht</span></div>
         </div>
       </section>
+      ${statusCard(yearInv, exp, y)}
       ${late.length ? `<div class="stack-s"><a class="notice bad" href="#/rechnungen" data-filter="unpaid"><span class="dot"></span><span>${late.length === 1 ? "1 Rechnung" : late.length + " Rechnungen"} über dem Zahlungsziel</span>${ic("chev", 18)}</a>
         <button class="btn sm self-start" type="button" id="paid-all" style="margin-left:4px">Alle als bezahlt markieren</button></div>` : ""}
       ${pending.length ? `<a class="notice acc" href="#/abrechnung">${ic("file", 20)}<span>Abrechnung erhalten? Einlesen und ${pending.length === 1 ? "die Erstattung" : `${pending.length} Erstattungen`} übernehmen</span>${ic("chev", 18)}</a>` : ""}
+      ${chart.html}
       <section class="stack-s">
-        <h2 class="sec-t">Familie</h2>
+        <h2 class="sec-t">${fp === "all" ? "Familie" : "Tarif"}</h2>
         ${results.length ? `<div class="card list">${results.map(x => personRow(x.p, x.r)).join("")}</div>` : `<div class="card empty">Noch keine Personen. <a href="#/einstellungen">In den Einstellungen anlegen</a>.</div>`}
-      </section>
-      <section class="card stack">
-        <div class="split"><h2 class="h3">Arztkosten</h2><span class="small muted">${fmtEur(yearSum)} gesamt</span></div>
-        <div class="bars" role="img" aria-label="Arztkosten pro Monat ${y}">${months.map((v, m) => `<div class="bar ${v ? "has" : ""} ${m > curM ? "future" : ""}" style="height:${v ? Math.max(6, v / mMax * 92) : 4}px">${v === Math.max(...months) && v ? `<span>${fmtEur0(v)}</span>` : ""}</div>`).join("")}</div>
-        <div class="bars-x">${"JFMAMJJASOND".split("").map((c, m) => `<span class="${months[m] ? "on" : ""}">${c}</span>`).join("")}</div>
       </section>
       <section class="stack-s">
         <div class="split" style="margin:0 4px"><h2 class="h3" style="font-size:17px">Als Nächstes</h2><a href="#/fristen" class="small">Alle</a></div>
@@ -490,8 +545,14 @@ function viewHome() {
     </main>`, "home");
 
   bindYear(viewHome);
+  const md = $("#mdetail");
+  const showM = m => { const x = chart.months[m], t = chart.tot[m];
+    $$(".mbar").forEach(b => b.classList.toggle("sel", Number(b.dataset.m) === m));
+    md.innerHTML = t ? `<b>${MONTHS_L[m]}</b> · ${fmtEur(t)} · ${x.n} ${x.n === 1 ? "Rechnung" : "Rechnungen"}${[x.done > 0.004 ? `<span class="nw"><span class="lg lg-done"></span> erstattet ${fmtEur(x.done)}${!same2(x.got, x.done) ? ` (${fmtEur(x.got)} erhalten)` : ""}</span>` : "", x.wait > 0.004 ? `<span class="nw"><span class="lg lg-wait"></span> eingereicht ${fmtEur(x.wait)}</span>` : "", x.open > 0.004 ? `<span class="nw"><span class="lg lg-open"></span> nicht eingereicht ${fmtEur(x.open)}</span>` : ""].filter(Boolean).map(t => "<br>" + t).join("")}` : `<b>${MONTHS_L[m]}</b> · keine Rechnungen`; };
+  $$(".mbar").forEach(b => { b.onclick = () => showM(Number(b.dataset.m)); b.onpointerenter = e => { if (e.pointerType === "mouse") showM(Number(b.dataset.m)); }; });
+  $$("[data-gofs]").forEach(a => a.addEventListener("click", () => { ui.fStatus = a.dataset.gofs; }));
   $("#install")?.addEventListener("click", async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewHome(); });
-  $("[data-filter=unpaid]")?.addEventListener("click", () => { ui.fStatus = "unpaid"; ui.fPerson = "all"; });
+  $("[data-filter=unpaid]")?.addEventListener("click", () => { ui.fStatus = "unpaid"; });
   $("#paid-all")?.addEventListener("click", async () => {
     if (!(await confirmBox("Als bezahlt markieren?", `${late.length} überfällige Rechnung(en) werden als bezahlt markiert.`, "Markieren"))) return;
     late.forEach(i => { i.bezahlt = true; i.bezahltAm = today(); });
@@ -522,6 +583,7 @@ function viewList() {
   if (ui.fStatus === "unpaid") list = list.filter(i => !i.bezahlt);
   if (ui.fStatus === "notsub") list = list.filter(i => !i.eingereicht);
   if (ui.fStatus === "refund") list = list.filter(refundOpen);
+  if (ui.fStatus === "done") list = list.filter(isRefunded);
   const q = ui.q.trim().toLowerCase();
   if (q) list = list.filter(i => `${i.arzt} ${i.notiz} ${catLabel(i.kategorie)}`.toLowerCase().includes(q));
   list = [...list].sort((a, b) => effDate(b).localeCompare(effDate(a)));
@@ -541,6 +603,7 @@ function viewList() {
     <main class="main">
       <label class="search">${ic("search", 18)}<span class="sr">Suchen</span><input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}"></label>
       <div class="seg full" role="group" aria-label="Status">${seg("all", "Alle")}${seg("unpaid", "Zu zahlen", cnt.unpaid)}${seg("notsub", "Einreichen", cnt.notsub)}${seg("refund", "Erstattung", cnt.refund)}</div>
+      ${ui.fStatus === "done" ? `<button type="button" class="chip self-start" data-fs="all" aria-pressed="true">Nur erstattete ✕</button>` : ""}
       ${cnt.refund || ui.fStatus === "refund" ? `<a class="notice acc" href="#/abrechnung">${ic("file", 20)}<span>${cnt.refund ? `${cnt.refund} ${cnt.refund === 1 ? "Rechnung wartet" : "Rechnungen warten"} auf Erstattung – Abrechnung einlesen` : "Abrechnung der Versicherung einlesen"}</span>${ic("chev", 18)}</a>` : ""}
       ${S.persons.length > 1 ? `<div class="chips">${chip("all", "Alle")}${S.persons.map(p => chip(p.id, esc(p.name))).join("")}</div>` : ""}
       ${byMonth.length ? byMonth.map(g => `<div class="stack-s"><div class="month-h"><span>${g.k ? `${MONTHS_L[Number(g.k.slice(5, 7)) - 1]} ${g.k.slice(0, 4)}` : "Ohne Datum"}</span><span>${fmtEur(g.items.reduce((a, i) => a + Number(i.betrag || 0), 0))}</span></div>
@@ -552,7 +615,7 @@ function viewList() {
   $("#q").oninput = e => { ui.q = e.target.value; clearTimeout(viewList._t); viewList._t = setTimeout(() => { const pos = e.target.selectionStart; viewList(); const n = $("#q"); n.focus(); n.setSelectionRange(pos, pos); }, 250); };
 }
 root.addEventListener("click", e => {
-  const fp = e.target.closest("[data-fp]"); if (fp) { ui.fPerson = fp.dataset.fp; viewList(); return; }
+  const fp = e.target.closest("[data-fp]"); if (fp) { ui.fPerson = fp.dataset.fp; (location.hash.startsWith("#/rechnungen") ? viewList : viewHome)(); return; }
   const fs = e.target.closest("[data-fs]"); if (fs) { ui.fStatus = fs.dataset.fs; viewList(); return; }
   if (e.target.closest(".file-in")) picking = Date.now();
 });
