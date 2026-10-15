@@ -505,7 +505,7 @@ function viewHome() {
   const sbSum = results.reduce((a, x) => a + x.r.sbUsed, 0);
   const yearSum = chart.tot.reduce((a, b) => a + b, 0);
   const chip = (val, label) => `<button type="button" class="chip" data-fp="${val}" aria-pressed="${fp === val}">${label}</button>`;
-  const dl = deadlines(S.persons, S.invoices).filter(d => !d.overdue).slice(0, 3);
+  const dl = deadlines(persons, S.invoices.filter(mine)).filter(d => !d.overdue).slice(0, 3);
   const standalone = matchMedia("(display-mode: standalone)").matches;
   const groups = {};
   for (const { p, r } of results) { const c = choiceOf(p, r); if (c.choice !== "none") (groups[c.choice] ||= []).push(p.name); }
