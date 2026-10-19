@@ -132,8 +132,9 @@ export function splitParts(invoices) {
   return out;
 }
 
+export const noRefund = i => !!i.keineErstattung;
 export function dentalLedger(p, invoices, year) {
-  invoices = splitParts(invoices);
+  invoices = splitParts(invoices.filter(i => !noRefund(i)));
   const caps = dentalCapsOf(p), sy = startYearOf(p);
   const idx = sy ? year - sy + 1 : null;
   const limitFor = y => { if (!caps || !sy) return Infinity; const n = y - sy + 1; return n >= 1 && n <= caps.length ? caps[n - 1] : Infinity; };
@@ -175,8 +176,9 @@ export function calc(p, invoices, year, taxRatePct) {
   const dental = dentalLedger(p, invoices, year);
   invoices = splitParts(invoices);
   const inv = invoices.filter(i => i.personId === p.id && yearOf(i) === year);
-  const regular = inv.filter(i => !isNeutral(i.kategorie));
-  const neutral = inv.filter(i => isNeutral(i.kategorie));
+  const excluded = inv.filter(noRefund);
+  const regular = inv.filter(i => !noRefund(i) && !isNeutral(i.kategorie));
+  const neutral = inv.filter(i => !noRefund(i) && isNeutral(i.kategorie));
   const rate = i => rateOf(p, i.kategorie);
   const base = i => baseOf(p, i);
   const sbApplies = i => p.sbDental !== false || !isDental(i.kategorie);
@@ -233,7 +235,8 @@ export function calc(p, invoices, year, taxRatePct) {
   const threshold = eligible + rest;
   const submitWins = p.offset || breLost || payout > breNet;
   const best = breLost ? payout : Math.max(payout, breNet);
-  return { freeLines, sbLines, payoutFree, payoutSb, totalFree, totalSb, dental, dentalCut, lines, neutralLines, sbUsed, notCovered, capCut, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
+  const excludedTotal = excluded.reduce((a, i) => a + num(i.betrag), 0);
+  return { excluded, excludedTotal, freeLines, sbLines, payoutFree, payoutSb, totalFree, totalSb, dental, dentalCut, lines, neutralLines, sbUsed, notCovered, capCut, regularTotal, inv, regular, neutral, total, eligible, neutralRefund, sb, payout, bre, breFix, breVar, breTax, breNet,
     rest, threshold, fy, verdict, tone, submitted, unsubmitted, breLost, submitWins, best };
 }
 

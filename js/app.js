@@ -1,11 +1,11 @@
 import * as store from "./store.js";
-import { CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, effDate, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck, isDental, isNeutral, dentalCapsOf, dentalLedger } from "./calc.js";
+import { noRefund, CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, effDate, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck, isDental, isNeutral, dentalCapsOf, dentalLedger } from "./calc.js";
 import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, aiReadStatement, PROVIDERS, AIError } from "./ai.js";
 import { parseStatement, matchItems, candidates } from "./statement.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.5.1";
+const APP_VERSION = "2.6.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -126,7 +126,7 @@ const MONTHS_L = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", 
 const fmtEur0 = n => Math.round(Number(n) || 0).toLocaleString("de-DE") + " €";
 const dShort = iso => iso ? `${Number(iso.slice(8, 10))}. ${MONTHS_L[Number(iso.slice(5, 7)) - 1]}` : "";
 const dLong = iso => iso ? `${dShort(iso)} ${iso.slice(0, 4)}` : "";
-const refundOpen = i => i.eingereicht && (i.erstattet === null || i.erstattet === undefined || i.erstattet === "");
+const refundOpen = i => i.eingereicht && !noRefund(i) && (i.erstattet === null || i.erstattet === undefined || i.erstattet === "");
 function initials(name) {
   const w = String(name || "?").trim().split(/\s+/);
   if (w[1] && /^\d+$/.test(w[1])) return (w[0][0] + w[1]).toUpperCase();
@@ -134,6 +134,7 @@ function initials(name) {
 }
 const avatar = (p, sm = false) => `<span class="av ${sm ? "sm" : ""} c${Math.max(0, S.persons.indexOf(p)) % 4}" aria-hidden="true">${esc(initials(p?.name))}</span>`;
 function statusOf(i) {
+  if (noRefund(i)) return { cls: "muted", label: i.eingereicht ? "abgelehnt" : "keine Erstattung" };
   if (i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "") return { cls: "good", label: `erstattet ${fmtEur(i.erstattet)}` };
   if (i.eingereicht) return { cls: "acc", label: "eingereicht" };
   if (!i.bezahlt && i.faellig && i.faellig < today()) return { cls: "bad", label: "überfällig" };
@@ -424,6 +425,8 @@ function viewPersonYear(pid, year) {
       ${r.neutralLines.length ? `<section class="stack-s"><div class="split" style="margin:0 4px"><h2 class="h3">Vorsorge und Prophylaxe</h2><span class="xs muted">ohne Selbstbehalt, BRE-neutral</span></div>
         <div class="card list">${r.neutralLines.map(invRow).join("")}</div>
         <p class="xs muted" style="margin:0 4px">BRE-neutral nur, wenn die Voraussetzungen des Vorsorgeverzeichnisses deines Tarifs erfüllt sind. Kannst du jederzeit einreichen.</p></section>` : ""}
+      ${r.excluded.length ? `<section class="stack-s"><div class="split" style="margin:0 4px"><h2 class="h3">Ohne Erstattung</h2><span class="xs muted">zählt nicht für Selbstbehalt und Rückerstattung</span></div>
+        <div class="card list">${r.excluded.map(i => `<a href="#/rechnung/${i.id}" class="row"><span class="row-t"><b>${esc(i.arzt || "Ohne Praxisangabe")}</b><span class="xs muted">${dShort(effDate(i))}${i.notiz ? " · " + esc(i.notiz) : ""}</span></span><span class="row-v"><b>${fmtEur(i.betrag)}</b><span class="xs muted">${i.eingereicht ? "abgelehnt" : "selbst bezahlt"}</span></span></a>`).join("")}<div class="sum-row"><span>Summe ${fmtEur(r.excludedTotal)}</span><span class="muted">0,00 € zurück</span></div></div></section>` : ""}
       ${p.note ? `<p class="foot">${esc(p.note)}</p>` : ""}
       <p class="foot">Schätzung auf Basis deiner Tarifangaben. <a href="#/person/${p.id}">Tarif bearbeiten</a></p>
     </main>`, "home");
@@ -436,11 +439,12 @@ function greeting() {
 }
 
 const isRefunded = i => i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "";
-const stageOf = i => isRefunded(i) ? "done" : i.eingereicht ? "wait" : "open";
+const stageOf = i => noRefund(i) ? "none" : isRefunded(i) ? "done" : i.eingereicht ? "wait" : "open";
 const STAGES = [
   { k: "done", l: "Erstattet", fs: "done" },
   { k: "wait", l: "Eingereicht, Erstattung offen", fs: "refund" },
   { k: "open", l: "Nicht eingereicht", fs: "notsub" },
+  { k: "none", l: "Keine Erstattung", fs: "none" },
 ];
 
 function statusCard(inv, exp, y) {
@@ -452,11 +456,12 @@ function statusCard(inv, exp, y) {
   }
   const total = inv.reduce((a, i) => a + (Number(i.betrag) || 0), 0);
   if (!inv.length) return "";
-  const sub = { done: x => `${fmtEur(x.got)} erhalten`, wait: x => x.exp > 0.004 ? `erwartet ca. ${fmtEur(x.exp)}` : "im Selbstbehalt – keine Erstattung erwartet", open: x => x.exp > 0.004 ? `bei Einreichung ca. ${fmtEur(x.exp)}` : "" };
+  const sub = { none: () => "nicht erstattungsfähig oder abgelehnt", done: x => `${fmtEur(x.got)} erhalten`, wait: x => x.exp > 0.004 ? `erwartet ca. ${fmtEur(x.exp)}` : "im Selbstbehalt – keine Erstattung erwartet", open: x => x.exp > 0.004 ? `bei Einreichung ca. ${fmtEur(x.exp)}` : "" };
+  const shown = STAGES.filter(s => s.k !== "none" || g.none.n);
   return `<section class="card stack" aria-labelledby="st-h">
     <div class="split"><h2 class="h3" id="st-h">Stand Einreichung ${y}</h2><span class="small muted">${fmtEur(total)}</span></div>
     <div class="stbar" role="img" aria-label="${STAGES.map(s => `${s.l}: ${fmtEur(g[s.k].sum)}`).join(", ")}">${STAGES.filter(s => g[s.k].sum > 0.004).map(s => `<span class="seg-${s.k}" style="flex:${g[s.k].sum}"></span>`).join("")}</div>
-    <div class="list st-list">${STAGES.map(s => { const x = g[s.k]; return `<a class="row" href="#/rechnungen" data-gofs="${s.fs}">
+    <div class="list st-list">${shown.map(s => { const x = g[s.k]; return `<a class="row" href="#/rechnungen" data-gofs="${s.fs}">
       <span class="lg lg-${s.k}" aria-hidden="true"></span>
       <span class="row-t"><b>${s.l}</b><span class="xs muted">${x.n} ${x.n === 1 ? "Rechnung" : "Rechnungen"}${x.n && sub[s.k](x) ? " · " + sub[s.k](x) : ""}</span></span>
       <span class="row-v"><b class="num">${fmtEur(x.sum)}</b><span class="xs muted">${total ? Math.round(x.sum / total * 100) : 0} %</span></span></a>`; }).join("")}</div>
@@ -465,9 +470,10 @@ function statusCard(inv, exp, y) {
 }
 
 function monthChart(inv, y) {
-  const months = Array.from({ length: 12 }, () => ({ done: 0, wait: 0, open: 0, got: 0, n: 0 }));
+  const months = Array.from({ length: 12 }, () => ({ done: 0, wait: 0, open: 0, none: 0, got: 0, n: 0 }));
   for (const i of inv) { const m = Number(effDate(i).slice(5, 7)) - 1; if (!(m >= 0)) continue; const x = months[m]; x[stageOf(i)] += Number(i.betrag) || 0; x.n++; if (isRefunded(i)) x.got += Number(i.erstattet) || 0; }
-  const tot = months.map(x => x.done + x.wait + x.open);
+  const tot = months.map(x => x.done + x.wait + x.open + x.none);
+  const hasNone = months.some(x => x.none > 0.004);
   const mMax = Math.max(...tot, 1), yearSum = tot.reduce((a, b) => a + b, 0);
   const curM = new Date().getFullYear() === y ? new Date().getMonth() : (y < new Date().getFullYear() ? 11 : -1);
   const top = tot.indexOf(Math.max(...tot));
@@ -475,13 +481,13 @@ function monthChart(inv, y) {
   const bars = months.map((x, m) => {
     const t = tot[m];
     const label = `${MONTHS_L[m]}: ${fmtEur(t)}${t ? ` – erstattet ${fmtEur(x.done)}, eingereicht ${fmtEur(x.wait)}, nicht eingereicht ${fmtEur(x.open)}` : ""}`;
-    if (!t) return `<button type="button" class="mbar empty ${m > curM ? "future" : ""}" data-m="${m}" aria-label="${esc(label)}"><span class="mstack" style="height:4px"><span class="seg-none"></span></span></button>`;
+    if (!t) return `<button type="button" class="mbar empty ${m > curM ? "future" : ""}" data-m="${m}" aria-label="${esc(label)}"><span class="mstack" style="height:4px"><span class="seg-empty"></span></span></button>`;
     const h = Math.max(8, t / mMax * H);
-    return `<button type="button" class="mbar" data-m="${m}" aria-label="${esc(label)}">${m === top ? `<span class="mtop">${fmtEur0(t)}</span>` : ""}<span class="mstack" style="height:${h}px">${["open", "wait", "done"].filter(k => x[k] > 0.004).map(k => `<span class="seg-${k}" style="flex:${x[k]}"></span>`).join("")}</span></button>`;
+    return `<button type="button" class="mbar" data-m="${m}" aria-label="${esc(label)}">${m === top ? `<span class="mtop">${fmtEur0(t)}</span>` : ""}<span class="mstack" style="height:${h}px">${["none", "open", "wait", "done"].filter(k => x[k] > 0.004).map(k => `<span class="seg-${k}" style="flex:${x[k]}"></span>`).join("")}</span></button>`;
   }).join("");
   return { html: `<section class="card stack">
       <div class="split"><h2 class="h3">Arztkosten nach Status</h2><span class="small muted">${fmtEur(yearSum)} gesamt</span></div>
-      <div class="legend">${STAGES.map(s => `<span><i class="lg lg-${s.k}"></i>${s.k === "wait" ? "Eingereicht" : s.l}</span>`).join("")}</div>
+      <div class="legend">${STAGES.filter(s => s.k !== "none" || hasNone).map(s => `<span><i class="lg lg-${s.k}"></i>${s.k === "wait" ? "Eingereicht" : s.l}</span>`).join("")}</div>
       <div class="mbars">${bars}</div>
       <div class="bars-x">${"JFMAMJJASOND".split("").map((c, m) => `<span class="${tot[m] ? "on" : ""}">${c}</span>`).join("")}</div>
       <p class="mdetail small" id="mdetail" aria-live="polite">Tippe auf einen Monat für Details.</p>
@@ -549,7 +555,7 @@ function viewHome() {
   const md = $("#mdetail");
   const showM = m => { const x = chart.months[m], t = chart.tot[m];
     $$(".mbar").forEach(b => b.classList.toggle("sel", Number(b.dataset.m) === m));
-    md.innerHTML = t ? `<b>${MONTHS_L[m]}</b> · ${fmtEur(t)} · ${x.n} ${x.n === 1 ? "Rechnung" : "Rechnungen"}${[x.done > 0.004 ? `<span class="nw"><span class="lg lg-done"></span> erstattet ${fmtEur(x.done)}${!same2(x.got, x.done) ? ` (${fmtEur(x.got)} erhalten)` : ""}</span>` : "", x.wait > 0.004 ? `<span class="nw"><span class="lg lg-wait"></span> eingereicht ${fmtEur(x.wait)}</span>` : "", x.open > 0.004 ? `<span class="nw"><span class="lg lg-open"></span> nicht eingereicht ${fmtEur(x.open)}</span>` : ""].filter(Boolean).map(t => "<br>" + t).join("")}` : `<b>${MONTHS_L[m]}</b> · keine Rechnungen`; };
+    md.innerHTML = t ? `<b>${MONTHS_L[m]}</b> · ${fmtEur(t)} · ${x.n} ${x.n === 1 ? "Rechnung" : "Rechnungen"}${[x.done > 0.004 ? `<span class="nw"><span class="lg lg-done"></span> erstattet ${fmtEur(x.done)}${!same2(x.got, x.done) ? ` (${fmtEur(x.got)} erhalten)` : ""}</span>` : "", x.wait > 0.004 ? `<span class="nw"><span class="lg lg-wait"></span> eingereicht ${fmtEur(x.wait)}</span>` : "", x.open > 0.004 ? `<span class="nw"><span class="lg lg-open"></span> nicht eingereicht ${fmtEur(x.open)}</span>` : "", x.none > 0.004 ? `<span class="nw"><span class="lg lg-none"></span> keine Erstattung ${fmtEur(x.none)}</span>` : ""].filter(Boolean).map(t => "<br>" + t).join("")}` : `<b>${MONTHS_L[m]}</b> · keine Rechnungen`; };
   $$(".mbar").forEach(b => { b.onclick = () => showM(Number(b.dataset.m)); b.onpointerenter = e => { if (e.pointerType === "mouse") showM(Number(b.dataset.m)); }; });
   $$("[data-gofs]").forEach(a => a.addEventListener("click", () => { ui.fStatus = a.dataset.gofs; }));
   $("#install")?.addEventListener("click", async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; viewHome(); });
@@ -571,7 +577,8 @@ function stamps(i) {
   if (i.erstattet !== null && i.erstattet !== undefined && i.erstattet !== "") t.push(`<span class="tag good">Erstattet ${fmtEur(i.erstattet)}</span>`);
   else if (i.eingereicht) t.push(`<span class="tag acc">Eingereicht${i.eingereichtAm ? " " + fmtShort(i.eingereichtAm) : ""}</span>`);
   else t.push(`<span class="tag">Nicht eingereicht</span>`);
-  if (isNeutral(i.kategorie)) t.push(`<span class="tag">BRE-neutral</span>`);
+  if (noRefund(i)) t.push(`<span class="tag">Keine Erstattung</span>`);
+  else if (isNeutral(i.kategorie)) t.push(`<span class="tag">BRE-neutral</span>`);
   if (i.unfall) t.push(`<span class="tag">Unfall</span>`);
   return t.join("");
 }
@@ -579,10 +586,11 @@ function stamps(i) {
 function viewList() {
   const y = ui.year;
   const base = S.invoices.filter(i => yearOf(i) === y && (ui.fPerson === "all" || i.personId === ui.fPerson));
-  const cnt = { unpaid: base.filter(i => !i.bezahlt).length, notsub: base.filter(i => !i.eingereicht && !isNeutral(i.kategorie)).length, refund: base.filter(refundOpen).length };
+  const cnt = { unpaid: base.filter(i => !i.bezahlt).length, notsub: base.filter(i => !i.eingereicht && !noRefund(i) && !isNeutral(i.kategorie)).length, refund: base.filter(refundOpen).length };
   let list = base;
   if (ui.fStatus === "unpaid") list = list.filter(i => !i.bezahlt);
-  if (ui.fStatus === "notsub") list = list.filter(i => !i.eingereicht);
+  if (ui.fStatus === "notsub") list = list.filter(i => !i.eingereicht && !noRefund(i));
+  if (ui.fStatus === "none") list = list.filter(noRefund);
   if (ui.fStatus === "refund") list = list.filter(refundOpen);
   if (ui.fStatus === "done") list = list.filter(isRefunded);
   const q = ui.q.trim().toLowerCase();
@@ -604,7 +612,7 @@ function viewList() {
     <main class="main">
       <label class="search">${ic("search", 18)}<span class="sr">Suchen</span><input id="q" type="search" placeholder="Suchen" value="${esc(ui.q)}"></label>
       <div class="seg full" role="group" aria-label="Status">${seg("all", "Alle")}${seg("unpaid", "Zu zahlen", cnt.unpaid)}${seg("notsub", "Einreichen", cnt.notsub)}${seg("refund", "Erstattung", cnt.refund)}</div>
-      ${ui.fStatus === "done" ? `<button type="button" class="chip self-start" data-fs="all" aria-pressed="true">Nur erstattete ✕</button>` : ""}
+      ${ui.fStatus === "done" || ui.fStatus === "none" ? `<button type="button" class="chip self-start" data-fs="all" aria-pressed="true">${ui.fStatus === "done" ? "Nur erstattete" : "Nur ohne Erstattung"} ✕</button>` : ""}
       ${cnt.refund || ui.fStatus === "refund" ? `<a class="notice acc" href="#/abrechnung">${ic("file", 20)}<span>${cnt.refund ? `${cnt.refund} ${cnt.refund === 1 ? "Rechnung wartet" : "Rechnungen warten"} auf Erstattung – Abrechnung einlesen` : "Abrechnung der Versicherung einlesen"}</span>${ic("chev", 18)}</a>` : ""}
       ${S.persons.length > 1 ? `<div class="chips">${chip("all", "Alle")}${S.persons.map(p => chip(p.id, esc(p.name))).join("")}</div>` : ""}
       ${byMonth.length ? byMonth.map(g => `<div class="stack-s"><div class="month-h"><span>${g.k ? `${MONTHS_L[Number(g.k.slice(5, 7)) - 1]} ${g.k.slice(0, 4)}` : "Ohne Datum"}</span><span>${fmtEur(g.items.reduce((a, i) => a + Number(i.betrag || 0), 0))}</span></div>
@@ -708,6 +716,7 @@ function viewEdit() {
           <label class="tg"><span>Bezahlt</span><input type="checkbox" class="sw" id="f-bezahlt" ${i.bezahlt ? "checked" : ""}></label>
           ${isDental(i.kategorie) ? `<label class="tg"><span class="tg-t"><span>Unfallfolge</span><span class="xs muted">zählt nicht zum Zahn-Höchstbetrag</span></span><input type="checkbox" class="sw" id="f-unfall" ${i.unfall ? "checked" : ""}></label>` : ""}
           <label class="tg"><span>Eingereicht</span><input type="checkbox" class="sw" id="f-eing" ${i.eingereicht ? "checked" : ""}></label>
+          <label class="tg"><span class="tg-t"><span>Wird nicht erstattet</span><span class="xs muted">z. B. IGeL, nicht im Tarif oder abgelehnt</span></span><input type="checkbox" class="sw" id="f-keine" ${i.keineErstattung ? "checked" : ""}></label>
           <label class="tg"><span>Erstattet (€)</span><input id="f-erst" type="number" inputmode="decimal" step="0.01" min="0" class="mini" value="${i.erstattet ?? ""}" placeholder="–"></label>
         </div>
         <p class="form-err" id="f-err" role="alert"></p>
@@ -716,6 +725,7 @@ function viewEdit() {
       </form>
     </main>`);
 
+  $("#f-keine").onchange = () => { collectForm(); const y = scrollY; viewEdit(); scrollTo(0, y); };
   $("#q-paid")?.addEventListener("click", () => quickToggle("bezahlt"));
   $("#q-sub")?.addEventListener("click", () => quickToggle("eingereicht"));
   $("#f-cam").onchange = e => addFiles(e.target.files);
@@ -775,6 +785,8 @@ function positionsEditor() {
 function refundBox() {
   const i = draft.inv;
   if (!(Number(i.betrag) > 0) || !i.personId || !i.datum) return "";
+  if (noRefund(i)) return `<section class="card stack-s" id="refund-box"><h2 class="h3">Keine Erstattung</h2>
+    <p class="small" style="color:var(--ink2)">Diese Rechnung zählt nicht zum Selbstbehalt und nicht zur Schwelle fürs Einreichen. Sie kostet auch keine Beitragsrückerstattung – die Versicherung hat dafür ja nichts gezahlt.${i.eingereicht ? "" : " Du musst sie nicht einreichen."}</p></section>`;
   const others = S.invoices.filter(x => x.id !== i.id);
   const map = expectedFor([...others, i]);
   const l = map[i.id], lv = map[i.id + "#v"];
@@ -827,6 +839,7 @@ function collectForm() {
   if (i.bezahlt && !wasPaid) i.bezahltAm = today();
   if (i.eingereicht && !wasSub) i.eingereichtAm = today();
   const er = $("#f-erst").value; i.erstattet = er === "" ? null : Number(er);
+  if ($("#f-keine").checked) i.keineErstattung = true; else delete i.keineErstattung;
   const uf = $("#f-unfall"); if (uf) i.unfall = uf.checked; else if (!isDental(i.kategorie)) delete i.unfall;
 }
 
