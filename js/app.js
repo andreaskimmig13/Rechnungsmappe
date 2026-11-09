@@ -5,7 +5,7 @@ import { aiRead, aiReadStatement, PROVIDERS, AIError } from "./ai.js";
 import { parseStatement, matchItems, candidates } from "./statement.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.7.0";
+const APP_VERSION = "2.8.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -70,11 +70,121 @@ let picking = 0;       // Zeitpunkt, an dem Kamera/Dateiauswahl geöffnet wurde
 
 const defaultState = () => ({
   version: 1,
-  settings: { taxRate: 42, lockMinutes: 1, ai: { provider: "claude", apiKey: "", model: "", askBefore: true } },
+  settings: { taxRate: 42, lockMinutes: 1, ai: { provider: "claude", apiKey: "", model: "", askBefore: true }, backup: { code: "", last: "", err: "" } },
   persons: [], invoices: [],
 });
 
-async function save() { await store.saveDoc("state", S); }
+async function save() { await store.saveDoc("state", S); scheduleBackup(); }
+
+// ---------- Automatisches Backup (Google Drive über die App-Backup-Brücke) ----------
+// Backup-Code: <Brücken-Adresse>#<Brücken-Schlüssel>#<Geheimnis>. Mit dem Geheimnis wird das Backup
+// hier auf dem Gerät verschlüsselt; es wird nie an die Brücke oder an Google geschickt.
+let bkTimer = null, bkBusy = false;
+const bkCfg = () => (S.settings.backup ||= { code: "", last: "", err: "" });
+function parseCode(c) {
+  const [url = "", key = "", secret = ""] = String(c || "").trim().split("#");
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec$/.test(url) || key.length < 20) return null;
+  return { url, key, secret };
+}
+const bkOn = () => !!(S && parseCode(S.settings?.backup?.code)?.secret);
+function newSecret() {
+  const b = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function bridge(code, body) {
+  const c = parseCode(code);
+  if (!c) throw new Error("Der Backup-Code ist unvollständig.");
+  let r;
+  try { r = await fetch(c.url, { method: "POST", body: JSON.stringify({ key: c.key, app: "rechnungsmappe", ...body }) }); }
+  catch { throw new Error("Brücke nicht erreichbar. Internetverbindung prüfen."); }
+  let j;
+  try { j = JSON.parse(await r.text()); } catch { throw new Error("Die Brücke antwortet nicht wie erwartet. Backup-Code prüfen."); }
+  if (j.error) throw new Error(j.error === "Falscher Schlüssel" ? "Der Backup-Code passt nicht zur Brücke." : j.error);
+  return j;
+}
+function scheduleBackup() { if (!bkOn()) return; clearTimeout(bkTimer); bkTimer = setTimeout(() => runBackup(false), 60000); }
+async function runBackup(manual) {
+  if (!bkOn() || !store.isUnlocked()) { if (manual) toast("Bitte zuerst den Backup-Code eintragen."); return; }
+  if (bkBusy) return;
+  if (!navigator.onLine) { if (manual) toast("Du bist offline. Das Backup läuft, sobald du wieder online bist."); return; }
+  bkBusy = true;
+  const cfg = bkCfg();
+  try {
+    const state = structuredClone(S);
+    state.settings.backup = { code: "", last: "", err: "" };
+    const blob = await store.makeBackup(parseCode(cfg.code).secret, state);
+    await bridge(cfg.code, { action: "speichern", daten: await blob.text() });
+    const now = new Date().toISOString();
+    cfg.last = now; cfg.err = "";
+    await store.setLastBackupAt(now);
+    if (manual) toast("Backup in Google Drive gespeichert");
+  } catch (e) {
+    cfg.err = e.message || "Backup fehlgeschlagen.";
+    if (manual) toast(cfg.err);
+  } finally {
+    bkBusy = false;
+    if (S && store.isUnlocked()) await store.saveDoc("state", S);
+  }
+}
+window.addEventListener("online", () => { if (bkOn() && bkCfg().err) scheduleBackup(); });
+
+async function setupBackupFlow() {
+  const cfg = bkCfg();
+  const input = ($("#bk-code")?.value || "").trim();
+  if (!input) {
+    if (cfg.code && !(await confirmBox("Automatisches Backup ausschalten?", "Es werden keine neuen Backups mehr in Google Drive gespeichert. Vorhandene Backups bleiben dort.", "Ausschalten"))) return;
+    clearTimeout(bkTimer); S.settings.backup = { code: "", last: "", err: "" }; await store.saveDoc("state", S); toast("Automatisches Backup ausgeschaltet"); viewSettings(); return;
+  }
+  const p = parseCode(input);
+  if (!p) { toast("Der Code ist unvollständig. Bitte komplett einfügen."); return; }
+  const old = parseCode(cfg.code);
+  // Geheimnis behalten, wenn nur der Brücken-Code erneut eingefügt wurde – sonst wären ältere Backups nicht mehr lesbar
+  const secret = p.secret || (old && old.url === p.url && old.key === p.key ? old.secret : "") || newSecret();
+  const full = `${p.url}#${p.key}#${secret}`;
+  toast("Verbindung wird geprüft …");
+  try { await bridge(full, { action: "test" }); } catch (e) { toast(e.message); return; }
+  cfg.code = full; cfg.err = "";
+  await store.saveDoc("state", S);
+  await showBackupCode(!p.secret);
+  await runBackup(true);
+  viewSettings();
+}
+async function showBackupCode(isNew) {
+  const code = bkCfg().code;
+  await modal({
+    title: isNew ? "Dein Backup-Code" : "Backup-Code",
+    body: `<p class="small">${isNew ? "Die App hat den Code um einen geheimen Teil ergänzt. Nur mit diesem vollständigen Code lassen sich deine Backups wiederherstellen." : "Mit diesem Code stellst du deine Daten auf einem neuen Handy wieder her."}</p>
+      <p class="small"><b>Speichere ihn jetzt im Google Passwortmanager</b> (oder einem anderen Passwortmanager). Der gleiche Code gilt auch für den Trainingscoach.</p>
+      <textarea id="m-code" class="mono" rows="4" readonly style="width:100%;font-size:.8rem;word-break:break-all">${esc(code)}</textarea>`,
+    actions: [{ label: "Kopieren", collect: w => { const t = $("#m-code", w); navigator.clipboard?.writeText(code).then(() => toast("Code kopiert"), () => { t.select(); toast("Bitte markierten Code kopieren"); }); return undefined; } }, { label: "Fertig", value: true, primary: true }],
+  });
+}
+async function restoreFromDrive({ replace }) {
+  const code = await modal({
+    title: "Aus Google Drive wiederherstellen",
+    body: `<p class="small">Füge deinen vollständigen Backup-Code ein, z. B. aus dem Google Passwortmanager.</p>
+      <label class="field"><span>Backup-Code</span><input id="m-code" type="password" autocomplete="off"></label><p class="form-err" id="m-err"></p>`,
+    actions: [{ label: "Abbrechen", value: null }, { label: "Wiederherstellen", primary: true, collect: w => {
+      const v = $("#m-code", w).value.trim(), p = parseCode(v);
+      if (!p) { $("#m-err", w).textContent = "Der Code ist unvollständig."; return undefined; }
+      if (!p.secret) { $("#m-err", w).textContent = "Das ist nur der Brücken-Code. Bitte den vollständigen Backup-Code aus der Rechnungsmappe einfügen."; return undefined; }
+      return v;
+    } }],
+  });
+  if (!code) return;
+  toast("Backup wird geladen …");
+  let j, data;
+  try { j = await bridge(code, { action: "laden" }); } catch (e) { toast(e.message); return; }
+  try { data = await store.readBackup(JSON.parse(j.daten), parseCode(code).secret); }
+  catch { toast("Das Backup lässt sich mit diesem Code nicht entschlüsseln."); return; }
+  const ok = await applyData(data, { replace });
+  if (!ok) return;
+  S.settings.backup = { code, last: j.zeit, err: "" };
+  await store.setLastBackupAt(j.zeit);
+  await store.saveDoc("state", S);
+  toast(`Wiederhergestellt: Stand vom ${fmtDate(j.zeit.slice(0, 10))}`);
+  location.hash = "#/"; route();
+}
 const person = id => S.persons.find(p => p.id === id);
 
 // ---------- Kleine UI-Helfer ----------
@@ -196,6 +306,7 @@ function showLock(error = "") {
       S = (await store.loadDoc("state")) || defaultState();
       if ((S.persons || []).map(normalizePerson).some(Boolean)) await save();
       route();
+      setTimeout(() => { try { const b = S?.settings?.backup; if (bkOn() && (!b.last || b.err || Date.now() - new Date(b.last) > 864e5)) runBackup(false); } catch {} }, 5000);
     },
   });
   $("#forgot").onclick = async () => {
@@ -242,7 +353,8 @@ function setupPeople() {
       <section class="card">
         <h2 class="h2">Daten übernehmen</h2>
         <p class="muted">Hast du eine Importdatei aus der bisherigen Rechnungsmappe oder ein Backup? Dann lade sie hier – Personen, Tarife und Rechnungen werden übernommen.</p>
-        <label class="btn primary file-btn">${ic("file", 20)} Datei laden<input type="file" id="imp" accept="application/json,.json" class="file-in"></label>
+        <button type="button" class="btn primary" id="imp-drive">${ic("rot", 20)} Aus Google Drive wiederherstellen</button>
+        <label class="btn file-btn">${ic("file", 20)} Datei laden<input type="file" id="imp" accept="application/json,.json" class="file-in"></label>
       </section>
       <div class="or">oder neu anlegen</div>
       <div id="plist" class="stack"></div>
@@ -273,6 +385,7 @@ function setupPeople() {
     toast(`${name} hinzugefügt`);
   };
   $("#imp").onchange = e => importFile(e.target.files[0], { replace: true });
+  $("#imp-drive").onclick = () => restoreFromDrive({ replace: true });
   $("#np-done").onclick = async () => {
     if (!S.persons.length) { toast("Lege mindestens eine Person an oder lade eine Datei."); return; }
     S.settings.taxRate = Number($("#np-tax").value) || 0;
@@ -1092,16 +1205,25 @@ async function viewSettings() {
       <section class="card dark stack">
         ${ic("lock", 32)}
         <h2 class="h2">Deine Daten bleiben auf diesem Handy</h2>
-        <p class="small">Rechnungen, Fotos und Tarife liegen verschlüsselt im Speicher dieses Geräts. Es gibt kein Konto und keinen Server mit deinen Daten.</p>
+        <p class="small">Rechnungen, Fotos und Tarife liegen verschlüsselt im Speicher dieses Geräts. Es gibt kein Konto und keinen Server, der deine Daten lesen kann.</p>
         <span class="num xs soft">${S.invoices.length} Rechnungen · ${pages} Fotos · ${S.persons.length} Personen${usage}</span>
         ${persisted === false ? `<span class="xs soft">Tipp: Installiere die App auf dem Startbildschirm, damit Android den Speicher nicht automatisch aufräumt.</span>` : ""}
       </section>
 
       <section class="stack-s"><h3 class="sec">Backup</h3>
-        <div class="card stack ${stale ? "warn-card" : ""}">
-          <strong>${last ? `Letztes Backup: ${fmtDate(last.slice(0, 10))}` : "Noch kein Backup"}</strong>
-          <p class="small">Ohne Backup sind deine Daten weg, wenn du das Handy verlierst oder die App löschst. Die Datei ist mit einem eigenen Passwort verschlüsselt – du kannst sie z. B. in Google Drive ablegen.</p>
-          <button type="button" class="btn ink" id="bk-make">${ic("dl", 20)} Verschlüsseltes Backup erstellen</button>
+        <div class="card stack ${bkOn() ? (bkCfg().err ? "warn-card" : "") : (stale ? "warn-card" : "")}">
+          <strong>${bkOn() ? (bkCfg().last ? `Automatisch gesichert: ${new Date(bkCfg().last).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })} Uhr` : "Automatisches Backup eingerichtet") : (last ? `Letztes Backup: ${fmtDate(last.slice(0, 10))}` : "Noch kein Backup")}</strong>
+          ${bkOn() && bkCfg().err ? `<p class="small">Letzter Versuch fehlgeschlagen: ${esc(bkCfg().err)}</p>` : ""}
+          <p class="small">${bkOn() ? "Nach jeder Änderung wird ein verschlüsseltes Backup in dein Google Drive gelegt (Ordner „App-Backups“). Google sieht nur eine unlesbare Datei." : "Ohne Backup sind deine Daten weg, wenn du das Handy verlierst oder die App löschst. Mit der App-Backup-Brücke sichert die App automatisch und verschlüsselt in dein Google Drive."}</p>
+          <label class="field"><span>Backup-Code</span><input id="bk-code" type="password" autocomplete="off" value="${esc(bkCfg().code)}" placeholder="Code der Brücke einfügen"></label>
+          <button type="button" class="btn ink" id="bk-setup">${bkOn() ? "Code speichern" : "Automatisches Backup einrichten"}</button>
+          ${bkOn() ? `<div class="grid2"><button type="button" class="btn" id="bk-now">${ic("rot", 18)} Jetzt sichern</button><button type="button" class="btn" id="bk-show">${ic("lock", 18)} Code anzeigen</button></div>` : ""}
+          <button type="button" class="btn" id="bk-restore">${ic("rot", 18)} Aus Google Drive wiederherstellen</button>
+        </div>
+        <div class="card stack">
+          <strong>Backup als Datei</strong>
+          <p class="small">Mit eigenem Passwort verschlüsselt, zum Ablegen wo du willst.</p>
+          <button type="button" class="btn" id="bk-make">${ic("dl", 20)} Verschlüsseltes Backup erstellen</button>
           <label class="btn file-btn">${ic("file", 20)} Backup oder Import laden<input type="file" id="bk-load" accept="application/json,.json" class="file-in"></label>
         </div>
       </section>
@@ -1158,6 +1280,10 @@ async function viewSettings() {
   $$("[data-theme-set]").forEach(b => b.onclick = () => { setTheme(b.dataset.themeSet); $$("[data-theme-set]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); });
   $("#add-p").onclick = async () => { const p = personFromPreset("custom", "child", { name: "Neue Person" }); S.persons.push(p); await save(); location.hash = `#/person/${p.id}`; };
   $("#bk-make").onclick = makeBackupFlow;
+  $("#bk-setup").onclick = setupBackupFlow;
+  $("#bk-restore").onclick = () => restoreFromDrive({ replace: false });
+  if ($("#bk-now")) $("#bk-now").onclick = async () => { toast("Backup läuft …"); await runBackup(true); viewSettings(); };
+  if ($("#bk-show")) $("#bk-show").onclick = () => showBackupCode(false);
   $("#upd").onclick = async () => {
     const b = $("#upd"); b.disabled = true; b.textContent = "Suche …";
     try {
@@ -1232,28 +1358,33 @@ async function importFile(file, { replace }) {
   } else if (json.format === "rechnungsmappe-import") {
     data = { state: { settings: json.settings || {}, persons: json.persons || [], invoices: json.invoices || [] }, blobs: json.blobs || {} };
   } else { toast("Unbekanntes Dateiformat."); return; }
+  if (await applyData(data, { replace })) { location.hash = "#/"; route(); }
+}
 
+async function applyData(data, { replace }) {
   const incoming = data.state;
   const n = (incoming.invoices || []).length, np = (incoming.persons || []).length;
   if (!replace && (S.invoices.length || S.persons.length)) {
     const mode = await modal({ title: "Daten übernehmen", body: `<p>Die Datei enthält ${np} Personen und ${n} Rechnungen.</p><p class="small muted">„Ergänzen“ fügt Neues hinzu und behält deine Daten. „Ersetzen“ stellt genau den Stand der Datei her.</p>`, actions: [{ label: "Abbrechen", value: null }, { label: "Ersetzen", value: "replace", danger: true }, { label: "Ergänzen", value: "merge", primary: true }] });
-    if (!mode) return;
+    if (!mode) return false;
     replace = mode === "replace";
   }
   toast("Daten werden übernommen …");
   if (replace) {
+    const keepBackup = S?.settings?.backup;
     await store.replaceBlobs(data.blobs);
     S = { ...defaultState(), ...incoming, settings: { ...defaultState().settings, ...(incoming.settings || {}), ai: { ...defaultState().settings.ai, ...(incoming.settings?.ai || {}) } } };
     (S.persons || []).forEach(normalizePerson);
+    if (keepBackup?.code) S.settings.backup = keepBackup;
   } else {
     await store.addBlobsFromB64(data.blobs);
     for (const p of incoming.persons || []) if (!person(p.id)) { normalizePerson(p); S.persons.push(p); }
     for (const i of incoming.invoices || []) if (!S.invoices.some(x => x.id === i.id)) S.invoices.push(i);
     if (incoming.settings?.taxRate && !S.invoices.length) S.settings.taxRate = incoming.settings.taxRate;
   }
-  await save();
+  await store.saveDoc("state", S);
   toast(`${np} Personen und ${n} Rechnungen übernommen`);
-  location.hash = "#/"; route();
+  return true;
 }
 
 // ---------- Person / Tarif ----------
