@@ -1,11 +1,11 @@
 import * as store from "./store.js";
-import { noRefund, CATS, catLabel, PRESETS, personFromPreset, calc, deadlines, yearOf, effDate, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck, isDental, isNeutral, dentalCapsOf, dentalLedger } from "./calc.js";
+import { noRefund, CATS, catLabel, PRESETS, DEADLINE_RULES, normalizePerson, personFromPreset, calc, deadlines, yearOf, effDate, fmtEur, fmtDate, fmtShort, BBHV, CAPPED_CATS, bbhvItem, capsOf, positionCheck, isDental, isNeutral, dentalCapsOf, dentalLedger } from "./calc.js";
 import { normalizeImage, readPdf, ocrImages, parseInvoice } from "./scan.js";
 import { aiRead, aiReadStatement, PROVIDERS, AIError } from "./ai.js";
 import { parseStatement, matchItems, candidates } from "./statement.js";
 import { buildPackage, shareOrSave } from "./exporter.js";
 
-const APP_VERSION = "2.6.0";
+const APP_VERSION = "2.7.0";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -194,6 +194,7 @@ function showLock(error = "") {
       const ok = await store.unlock(pin);
       if (!ok) { showLock("Falsche PIN. Bitte erneut versuchen."); return; }
       S = (await store.loadDoc("state")) || defaultState();
+      if ((S.persons || []).map(normalizePerson).some(Boolean)) await save();
       route();
     },
   });
@@ -247,10 +248,9 @@ function setupPeople() {
       <div id="plist" class="stack"></div>
       <section class="card stack">
         <div class="grid2">
-          <label class="field"><span>Name</span><input id="np-name" autocomplete="off" placeholder="z. B. Andreas"></label>
+          <label class="field"><span>Name</span><input id="np-name" autocomplete="off" placeholder="z. B. Alex"></label>
           <label class="field"><span>Art</span><select id="np-kind"><option value="adult">Erwachsene/r</option><option value="child">Kind / Jugendliche/r</option></select></label>
         </div>
-        <label class="field"><span>Tarif</span><select id="np-preset">${PRESETS.map(p => `<option value="${p.id}">${esc(p.insurer ? p.insurer + " · " + p.tariff : p.tariff)}</option>`).join("")}</select></label>
         <div class="grid2">
           <label class="field"><span>Monatsbeitrag Krankenvers. (€)</span><input id="np-beitrag" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0,00"></label>
           <label class="field"><span>Versichert seit</span><input id="np-start" type="date"></label>
@@ -267,7 +267,7 @@ function setupPeople() {
   $("#np-add").onclick = async () => {
     const name = $("#np-name").value.trim();
     if (!name) { toast("Bitte einen Namen eingeben."); $("#np-name").focus(); return; }
-    S.persons.push(personFromPreset($("#np-preset").value, $("#np-kind").value, { name, beitrag: Number($("#np-beitrag").value) || 0, start: $("#np-start").value }));
+    S.persons.push(personFromPreset("custom", $("#np-kind").value, { name, beitrag: Number($("#np-beitrag").value) || 0, start: $("#np-start").value }));
     await save(); renderList();
     $("#np-name").value = ""; $("#np-beitrag").value = "";
     toast(`${name} hinzugefügt`);
@@ -809,7 +809,7 @@ function refundBox() {
     ${real && i.bescheidId && (S.bescheide || []).some(b => b.id === i.bescheidId) ? `<a class="xs" href="#/abrechnung/${i.bescheidId}">Laut Abrechnung vom ${fmtDate(S.bescheide.find(b => b.id === i.bescheidId).datum)} ansehen</a>` : ""}
     ${real && Math.abs(Number(i.erstattet) - l.refund) >= 0.01 ? `<p class="xs muted">Abweichung ${fmtEur(Number(i.erstattet) - l.refund)} – prüfe den Leistungsbescheid oder die Erstattungssätze im Tarif.</p>` : ""}
     ${(() => { if (!isDental(i.kategorie) || !p) return ""; const d = dentalLedger(p, [...others, i], yearOf(i)); return d.active ? `<p class="xs ${l.dentalCut > 0.004 ? "bad-t" : "muted"}">${i.unfall ? "Unfallfolge: zählt nicht zum Zahn-Budget." : `Zahn-Budget ${p.name}: noch ${fmtEur(d.remaining)} von ${fmtEur(d.limit)} frei (inkl. dieser Rechnung).`}</p>` : ""; })()}
-    ${lv || i.kategorie === "zahnprophylaxe" ? `<p class="xs muted">Zahn-Vorsorge (GOZ 0010, 1000–1040${p?.presetId === "signal-exklusiv1" ? ", 4005" : ""}, GOÄ 1) kostet keine Rückerstattung.${p?.presetId === "signal-exklusiv1" ? " Signal Iduna: mit dem „Vorblatt für Vorsorgeuntersuchungen“ einreichen, persönliche Leistungen höchstens zum 2,3-fachen Satz." : ""}${lv ? " Willst du die Rückerstattung behalten, bitte die Praxis, Vorsorge und Behandlung getrennt abzurechnen – dann kannst du die Vorsorge einreichen, ohne die Rückerstattung zu verlieren." : ""}</p>` : ""}
+    ${lv || i.kategorie === "zahnprophylaxe" ? `<p class="xs muted">Zahn-Vorsorge (GOZ 0010, 1000–1040${p?.vorsorgeGoz ? ", " + esc(p.vorsorgeGoz) : ""}, GOÄ 1) kostet keine Rückerstattung.${p?.vorsorgeNote ? " " + esc(p.insurer ? p.insurer + ": " : "") + esc(p.vorsorgeNote) : ""}${lv ? " Willst du die Rückerstattung behalten, bitte die Praxis, Vorsorge und Behandlung getrennt abzurechnen – dann kannst du die Vorsorge einreichen, ohne die Rückerstattung zu verlieren." : ""}</p>` : ""}
     ${!l.neutral && !l.sbFree ? `<p class="xs muted">Der Selbstbehalt wird auf die Rechnungen des Jahres in Datumsreihenfolge verrechnet.</p>` : ""}
   </section>`;
 }
@@ -1074,7 +1074,7 @@ function viewDeadlines() {
     <main class="main">
       ${over.length ? `<section class="stack"><h2 class="h3 bad-t">Überfällig</h2><ol class="card list-plain">${over.map(li).join("")}</ol></section>` : ""}
       <section class="stack"><h2 class="h3">Demnächst</h2>${next.length ? `<ol class="card list-plain">${next.map(li).join("")}</ol>` : `<div class="card empty small">Keine anstehenden Fristen.</div>`}</section>
-      <p class="foot">Fristen aus den Tarifbedingungen von uniVersa und Signal Iduna sowie die Zahlungsziele deiner offenen Rechnungen.</p>
+      <p class="foot">Fristen aus den Tarifbedingungen deiner Personen sowie die Zahlungsziele deiner offenen Rechnungen.</p>
     </main>`, "cal");
 }
 
@@ -1244,9 +1244,10 @@ async function importFile(file, { replace }) {
   if (replace) {
     await store.replaceBlobs(data.blobs);
     S = { ...defaultState(), ...incoming, settings: { ...defaultState().settings, ...(incoming.settings || {}), ai: { ...defaultState().settings.ai, ...(incoming.settings?.ai || {}) } } };
+    (S.persons || []).forEach(normalizePerson);
   } else {
     await store.addBlobsFromB64(data.blobs);
-    for (const p of incoming.persons || []) if (!person(p.id)) S.persons.push(p);
+    for (const p of incoming.persons || []) if (!person(p.id)) { normalizePerson(p); S.persons.push(p); }
     for (const i of incoming.invoices || []) if (!S.invoices.some(x => x.id === i.id)) S.invoices.push(i);
     if (incoming.settings?.taxRate && !S.invoices.length) S.settings.taxRate = incoming.settings.taxRate;
   }
@@ -1269,8 +1270,7 @@ function viewPerson(id) {
             <label class="field"><span>Name</span><input name="name" id="pp-name" value="${esc(p.name)}" required></label>
             <label class="field"><span>Art</span><select name="kind" id="pp-kind"><option value="adult" ${p.kind === "adult" ? "selected" : ""}>Erwachsene/r</option><option value="child" ${p.kind === "child" ? "selected" : ""}>Kind / Jugendliche/r</option></select></label>
           </div>
-          <label class="field"><span>Tarif-Vorlage</span><select id="pp-preset">${PRESETS.map(x => `<option value="${x.id}" ${x.id === p.presetId ? "selected" : ""}>${esc(x.insurer ? x.insurer + " · " + x.tariff : x.tariff)}</option>`).join("")}</select></label>
-          <button type="button" class="btn sm" id="pp-apply">Vorlage-Werte übernehmen</button>
+          <label class="field"><span>Fristen aus dem Tarif</span><select name="deadlines" id="pp-deadlines">${DEADLINE_RULES.map(r => `<option value="${r.k}" ${r.k === (p.deadlines || "none") ? "selected" : ""}>${esc(r.l)}</option>`).join("")}</select></label>
           <div class="grid2">
             <label class="field"><span>Versicherer</span><input name="insurer" id="pp-insurer" value="${esc(p.insurer)}"></label>
             <label class="field"><span>Tarif</span><input name="tariff" id="pp-tariff" value="${esc(p.tariff)}"></label>
@@ -1308,16 +1308,12 @@ function viewPerson(id) {
         <button type="button" class="btn danger-line" id="pp-del">Person entfernen</button>
       </form>
     </main>`);
-  $("#pp-apply").onclick = async () => {
-    const np = personFromPreset($("#pp-preset").value, $("#pp-kind").value, { id: p.id, name: $("#pp-name").value.trim() || p.name, beitrag: Number($("#pp-beitrag").value) || p.beitrag, start: $("#pp-start").value || p.start });
-    Object.assign(p, np); await save(); toast("Vorlage übernommen"); viewPerson(id);
-  };
   $("#pp").onsubmit = async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
     p.name = String(fd.get("name") || "").trim() || p.name; p.kind = fd.get("kind"); p.insurer = fd.get("insurer"); p.tariff = fd.get("tariff");
-    p.start = fd.get("start") || ""; p.presetId = $("#pp-preset").value;
-    p.deadlines = (PRESETS.find(x => x.id === p.presetId) || {}).deadlines || "none";
+    p.start = fd.get("start") || "";
+    p.deadlines = fd.get("deadlines") || "none";
     for (const k of ["beitrag", "sb", "breFix", "breMonate", "basisPct"]) p[k] = Number(fd.get(k)) || 0;
     for (const k of ["sbDental", "sbQuarterRule", "breVariableFirstYear", "offset"]) p[k] = fd.get(k) === "on";
     p.rates = Object.fromEntries(CATS.map(c => [c.k, Math.min(100, Math.max(0, Number(fd.get("r-" + c.k)) || 0))]));

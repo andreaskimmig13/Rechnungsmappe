@@ -16,7 +16,7 @@ export const CATS = [
   { k: "vorsorge", l: "Vorsorge, Impfung" },
 ];
 // Höchstbeträge nach Anlage 9 BBhV (zu § 23 Abs. 1), gültig ab 01.02.2026.
-// Signal Iduna erstattet Logopädie und Ergotherapie nur bis zu diesen Beträgen.
+// Manche Tarife erstatten Logopädie und Ergotherapie nur bis zu diesen Beträgen.
 export const BBHV = {
   valid: "2026-02-01",
   items: [
@@ -41,7 +41,7 @@ export const BBHV = {
 };
 export const CAPPED_CATS = ["logopaedie", "ergotherapie"];
 export const bbhvItem = code => BBHV.items.find(x => x.code === String(code || ""));
-export const capsOf = p => p.caps ?? (p.presetId === "signal-exklusiv1" ? "bbhv" : null);
+export const capsOf = p => p.caps ?? null;
 
 // Positionen einer Rechnung gegen die Höchstbeträge prüfen
 export function positionCheck(p, inv) {
@@ -69,19 +69,9 @@ export const isNeutral = k => NEUTRAL_CATS.includes(k);
 
 const rates = (over = {}) => ({ ambulant: 100, zahn: 100, zahnersatz: 90, heilmittel: 100, logopaedie: 100, ergotherapie: 100, arznei: 100, hilfsmittel: 100, sehhilfe: 100, stationaer: 100, vorsorge: 100, zahnprophylaxe: 100, ...over });
 
+// Vorlage für neue Personen. Die Tarifwerte trägst du in der App selbst ein;
+// sie liegen verschlüsselt auf deinem Gerät, nicht im Programmcode.
 export const PRESETS = [
-  {
-    id: "universa-top300", insurer: "uniVersa", tariff: "uni-Top|Privat 300", deadlines: "universa",
-    adult: { sb: 300, breFix: 600 }, child: { sb: 150, breFix: 300 },
-    common: { sbDental: true, sbQuarterRule: false, breMonate: 2.5, breVariableFirstYear: false, breEstimated: false, basisPct: 85, offset: false, rates: rates(), dentalCaps: [1500, 3000, 4500, 6000] },
-    note: "Reichst du nach Auszahlung der garantierten BRE noch Rechnungen für dasselbe Jahr ein, verrechnet uniVersa sie mit der BRE. Spätes Einreichen ist also möglich.",
-  },
-  {
-    id: "signal-exklusiv1", insurer: "Signal Iduna", tariff: "EXKLUSIV 1", deadlines: "signal",
-    adult: { sb: 480 }, child: { sb: 240 },
-    common: { breFix: 0, sbDental: false, sbQuarterRule: true, breMonate: 1, breVariableFirstYear: true, breEstimated: true, basisPct: 80, offset: false, rates: rates({ heilmittel: 80, logopaedie: 80, ergotherapie: 80 }), caps: "bbhv", dentalCaps: [750, 1500, 3000, 4500] },
-    note: "Selbstbehalt gilt nur für ambulant und stationär, nicht für Zahnleistungen. Die erfolgsabhängige BRE legt Signal Iduna jedes Jahr neu fest (Kinder: die Hälfte).",
-  },
   {
     id: "custom", insurer: "", tariff: "Eigener Tarif", deadlines: "none",
     adult: { sb: 0, breFix: 0 }, child: { sb: 0, breFix: 0 },
@@ -90,8 +80,30 @@ export const PRESETS = [
   },
 ];
 
+// Fristen-Regeln: welche Termine aus den Tarifbedingungen angezeigt werden
+export const DEADLINE_RULES = [
+  { k: "none", l: "Keine Tariffristen" },
+  { k: "bre-garantiert", l: "Garantierte BRE: Auszahlung bis 31.10., Beiträge bis 31.01." },
+  { k: "bre-erfolg", l: "Erfolgsabhängige BRE: abrufbar ab 01.07., Beiträge bis 31.03." },
+];
+
+// Ältere Datenstände auf das neue Format bringen. Ändert nichts an Beträgen oder Sätzen.
+export function normalizePerson(p) {
+  if (DEADLINE_RULES.some(r => r.k === p.deadlines)) return false;
+  const erfolg = !(Number(p.breFix) > 0) && !!p.breEstimated && p.deadlines && p.deadlines !== "none";
+  p.deadlines = Number(p.breFix) > 0 && p.deadlines ? "bre-garantiert" : erfolg ? "bre-erfolg" : "none";
+  if (p.deadlines === "bre-erfolg") {
+    if (p.caps === undefined) p.caps = "bbhv";
+    if (p.vorsorgeGoz === undefined) p.vorsorgeGoz = "4005";
+    if (p.vorsorgeNote === undefined) p.vorsorgeNote = "mit dem „Vorblatt für Vorsorgeuntersuchungen“ einreichen, persönliche Leistungen höchstens zum 2,3-fachen Satz.";
+  }
+  if (!Array.isArray(p.dentalCaps) && p.deadlines !== "none") p.dentalCaps = p.deadlines === "bre-garantiert" ? [1500, 3000, 4500, 6000] : [750, 1500, 3000, 4500];
+  p.presetId = "custom";
+  return true;
+}
+
 export function personFromPreset(presetId, kind, extra = {}) {
-  const p = PRESETS.find(x => x.id === presetId) || PRESETS[2];
+  const p = PRESETS.find(x => x.id === presetId) || PRESETS[0];
   return {
     id: "p-" + Math.random().toString(36).slice(2, 10),
     name: "", kind, presetId: p.id, insurer: p.insurer, tariff: p.tariff, deadlines: p.deadlines,
@@ -100,7 +112,7 @@ export function personFromPreset(presetId, kind, extra = {}) {
   };
 }
 
-// Maßgeblich ist das Jahr der Behandlung (beide Tarife), nicht das Rechnungsdatum
+// Maßgeblich ist in der Regel das Jahr der Behandlung, nicht das Rechnungsdatum
 export const effDate = inv => inv.behandlung || inv.datum || "";
 export const yearOf = inv => Number(String(effDate(inv)).slice(0, 4)) || new Date().getFullYear();
 const byDate = (a, b) => effDate(a).localeCompare(effDate(b));
@@ -110,7 +122,7 @@ const num = v => Number(v) || 0;
 // Das 1. Versicherungsjahr läuft vom Versicherungsbeginn bis 31.12., danach je Kalenderjahr.
 export const dentalCapsOf = p => {
   if (Array.isArray(p.dentalCaps)) return p.dentalCaps.filter(x => Number(x) > 0).length ? p.dentalCaps.map(Number) : null;
-  return PRESETS.find(x => x.id === p.presetId)?.common.dentalCaps || null;
+  return null;
 };
 const startYearOf = p => Number(String(p.start || "").slice(0, 4)) || null;
 const rateOf = (p, k) => num(p.rates?.[k] ?? (CAPPED_CATS.includes(k) ? p.rates?.heilmittel : undefined) ?? 100) / 100;
@@ -213,7 +225,7 @@ export function calc(p, invoices, year, taxRatePct) {
   const capCut = lines.reduce((a, l) => a + l.capCut, 0);
   const dentalCut = lines.reduce((a, l) => a + l.dentalCut, 0);
   const regularTotal = lines.reduce((a, l) => a + l.amount, 0);
-  // Getrennt: Rechnungen ohne Selbstbehalt (z. B. Zahn bei Signal Iduna) und mit Selbstbehalt
+  // Getrennt: Rechnungen ohne Selbstbehalt (z. B. Zahn, wenn der Selbstbehalt dafür nicht gilt) und mit Selbstbehalt
   const freeLines = lines.filter(l => l.sbFree), sbLines = lines.filter(l => !l.sbFree);
   const payoutFree = freeLines.reduce((a, l) => a + l.refund, 0), payoutSb = sbLines.reduce((a, l) => a + l.refund, 0);
   const totalFree = freeLines.reduce((a, l) => a + l.amount, 0), totalSb = sbLines.reduce((a, l) => a + l.amount, 0);
@@ -250,16 +262,17 @@ export function deadlines(persons, invoices, today = new Date()) {
   const names = ps => ps.map(p => p.name || "?").join(", ");
   const started = (p, y) => !p.start || Number(p.start.slice(0, 4)) <= y;
 
-  if (byRule.universa) {
-    const ps = byRule.universa;
+  const ins = ps => [...new Set(ps.map(p => p.insurer).filter(Boolean))].join(" / ") || "die Versicherung";
+  if (byRule["bre-garantiert"]) {
+    const ps = byRule["bre-garantiert"];
     const prev = ps.filter(p => started(p, Y - 1));
-    if (prev.length) add(`${Y}-10-31`, `Garantierte BRE ${Y - 1} von uniVersa wird spätestens im Oktober ausgezahlt, wenn ${Y - 1} leistungsfrei war (${names(prev)})`);
-    add(`${Y + 1}-01-31`, `Beiträge ${Y} an uniVersa vollständig gezahlt – sonst keine BRE (${names(ps)})`);
+    if (prev.length) add(`${Y}-10-31`, `Garantierte BRE ${Y - 1} von ${ins(prev)} wird spätestens im Oktober ausgezahlt, wenn ${Y - 1} leistungsfrei war (${names(prev)})`);
+    add(`${Y + 1}-01-31`, `Beiträge ${Y} an ${ins(ps)} vollständig gezahlt – sonst keine BRE (${names(ps)})`);
   }
-  if (byRule.signal) {
-    const ps = byRule.signal;
-    if (ps.some(p => started(p, Y - 1))) add(`${Y}-07-01`, `BRE ${Y - 1} von Signal Iduna ab jetzt abrufbar (${names(ps)})`);
-    add(`${Y + 1}-03-31`, `Beiträge ${Y} an Signal Iduna gezahlt – Voraussetzung für die BRE (${names(ps)})`);
+  if (byRule["bre-erfolg"]) {
+    const ps = byRule["bre-erfolg"];
+    if (ps.some(p => started(p, Y - 1))) add(`${Y}-07-01`, `BRE ${Y - 1} von ${ins(ps)} ab jetzt abrufbar (${names(ps)})`);
+    add(`${Y + 1}-03-31`, `Beiträge ${Y} an ${ins(ps)} gezahlt – Voraussetzung für die BRE (${names(ps)})`);
   }
   if (persons.length) add(`${Y}-12-31`, `Jahresende: entscheiden, ob Rechnungen ${Y} eingereicht werden`, "decision");
   for (const i of invoices) {
